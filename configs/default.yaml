@@ -1,0 +1,35 @@
+# Default pipeline configuration. Task-specific files (ant.yaml, go2.yaml)
+# override individual keys; CLI flags override both.
+
+task: Isaac-Ant-v0
+num_envs: 256
+num_steps: 50000
+headless: true
+seed: 42
+device: cuda:0
+
+exploration:
+  policy: random          # random | latent
+  action_std: 0.5
+  action_smoothing: 0.2
+  latent_dim: 8           # latent policy only
+  latent_horizon: 64      # latent policy only
+
+segmentation:
+  segment_horizon: 32
+  segment_stride: 16
+  min_segment_length: 16
+
+descriptor:
+  normalize: true         # z-score before clustering (done inside SkillClusterer)
+
+clustering:
+  method: kmeans          # kmeans | gmm | hdbscan
+  num_skills: 8
+  random_seed: 42
+
+composition:
+  target_threshold: 0.5
+  max_high_level_steps: 20
+  lambda_energy: 0.05
+  lambda_yaw: 0.1

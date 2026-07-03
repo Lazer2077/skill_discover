@@ -1,0 +1,11 @@
+# Isaac Lab itself (isaaclab / isaaclab_tasks, plus torch built for it) is
+# provided by the Isaac Lab installation and is NOT listed here.
+numpy>=1.24
+torch>=2.0
+scikit-learn>=1.3
+matplotlib>=3.7
+pyyaml>=6.0
+tqdm>=4.65
+
+# Optional: density-based clustering backend for SkillClusterer(method="hdbscan")
+# hdbscan>=0.8
