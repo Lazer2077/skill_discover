@@ -137,6 +137,47 @@ python scripts/visualize_skills.py \
   --skill_library outputs/skill_library_ant.pkl
 ```
 
+### 5.1 V2 online action-set learning
+
+V2 adds an online loop that updates the skill/action set while exploration is
+running.  Instead of waiting for one fixed offline clustering pass, every
+iteration collects fresh rollouts, segments them, scores candidate action
+chunks by reward, descriptor novelty, displacement, stability, smoothness and
+energy, stores useful chunks in an archive, then rebuilds the action set with
+weighted k-means over behavior descriptors.  The descriptor metric emphasizes
+outcome dimensions (`delta_x`, `delta_y`, `delta_yaw`, body-frame velocity)
+more than incidental action norm / energy dimensions, which makes the clusters
+less singleton-heavy during online updates.
+
+It also trains a learning-based state-skill discriminator: a small MLP over
+`(current_state_feature, skill_initial_state_feature)` pairs.  At test time,
+`DiscriminatorGuidedSkillComposer` uses a hybrid applicability score: learned
+MLP probability, RBF initial-state similarity, and a reliability penalty for
+low-sample skills.  It penalizes or filters skills whose recorded initial-state
+distribution does not match the current robot state.
+
+```bash
+TERM=xterm CONDA_PREFIX=/home/thing1/miniconda3/envs/env_isaaclab \
+/home/thing1/IsaacLab/isaaclab.sh -p scripts/online_skill_learning.py \
+  --task Isaac-Ant-v0 \
+  --num_envs 64 \
+  --online_iterations 5 \
+  --steps_per_iter 8192 \
+  --max_skills 16 \
+  --headless \
+  --output_dir outputs/online_v2_ant
+```
+
+V2 outputs:
+
+```
+outputs/online_v2_ant/online_action_set.pkl          # continuously updated action set
+outputs/online_v2_ant/skill_library_v2.pkl           # V1-compatible skill library view
+outputs/online_v2_ant/state_skill_discriminator.pt   # learned applicability model
+outputs/online_v2_ant/online_history.json            # per-iteration update/discriminator stats
+outputs/online_v2_ant/online_v2_summary.json         # final evaluation summary
+```
+
 **Expected outputs**
 
 ```
@@ -209,6 +250,22 @@ representative action sequence open-loop for H steps. `SkillMPC` extends this
 to brute-force search over skill *sequences* (default depth 3 → `8³ = 512`
 mean-model rollouts) with the documented cost function.
 
+### 6.6 V2 online discriminator-guided control
+`OnlineActionSet` maintains a bounded archive of action chunks during
+exploration.  After every update it performs a small NumPy weighted k-means
+clustering pass over the descriptor archive (NumPy is used instead of sklearn
+inside the Isaac process to avoid Kit import/runtime conflicts).  Each skill
+stores representative action sequences plus examples of states where those
+chunks started.
+
+`StateSkillDiscriminator` learns whether a current local state is dynamically
+similar to the initial-state examples for a skill.  The feature includes
+policy observation, body height/orientation, base velocity and joint state, but
+not global x/y position.  Its score combines the learned classifier with an
+RBF state-similarity prior so the controller remains calibrated in the small
+online-data regime.  This lets final evaluation prefer skills that are both
+goal-useful and likely executable from the current state.
+
 ## 7. Known limitations (V1)
 
 1. **Open-loop skills.** Replayed action sequences do not adapt to the
@@ -226,11 +283,12 @@ mean-model rollouts) with the documented cost function.
    penalized through the stability score rather than filtered out.
 7. Evaluation drives env 0 only; vectorized evaluation is future work.
 
-## 8. Future work (V2+ TODOs)
+## 8. Future work
 
-Marked with `FUTURE (V2+)` comments at the exact insertion points in code:
-
-- [ ] Learned low-level skill policy `π(a|s, z)` distilled from cluster segments (`library/skill_library.py`)
+- [x] Online action-set updates during exploration (`online/online_action_set.py`)
+- [x] Learning-based state-skill applicability discriminator (`learning/state_skill_discriminator.py`)
+- [x] Discriminator-guided skill application at test time (`control/discriminator_skill_composer.py`)
+- [ ] Learned low-level skill policy `π(a|s, z)` distilled from cluster segments
 - [ ] Option termination function instead of fixed H (`segmentation/fixed_horizon_segmenter.py`)
 - [ ] Skill-level dynamics model `p(s′|s, k)` with uncertainty (`control/skill_mpc.py`)
 - [ ] HJB-inspired value function over (x, y, yaw) for infinite-horizon skill selection (`control/skill_mpc.py`)
