@@ -1,0 +1,501 @@
+\documentclass{article}
+
+\usepackage{arxiv}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{amsfonts}
+\usepackage{amsmath}
+\usepackage{nicefrac}
+\usepackage{microtype}
+\usepackage{graphicx}
+\usepackage{natbib}
+\usepackage{multirow}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+
+\graphicspath{{figures/}}
+
+\title{Viability-Gated Skill Residuals for Test-Time Locomotion Control}
+
+\author{
+  Zongtan Li \\
+  \texttt{zongtanli2023@gmail.com} \\
+}
+
+\date{July 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Skill discovery can produce reusable temporal abstractions, but directly replaying open-loop action chunks is brittle for contact-rich legged locomotion.
+We introduce \emph{Viability-Gated Skill Residuals} (VGSR), a test-time control framework that builds an online archive from a converged locomotion policy and reuses archived behaviors as command-space residuals over a pretrained low-level controller.
+At each high-level step, VGSR selects archive chunks using predicted goal progress and state applicability, converts the selected chunk into a velocity-command prior, and activates it only when a viability gate predicts that the residual is goal-aligned, stable, and energetically in-distribution.
+In Isaac Lab rough-terrain experiments, VGSR improves a strong pretrained Unitree Go2 controller on harder target-reaching tasks, reducing an energy proxy by $9.3\%$ ($1.99$ vs.\ $2.20$) while maintaining a small success-rate advantage ($0.79$ vs.\ $0.78$) in a 20-trial-per-target aggregate of 100 episodes per method.
+On the H1 humanoid, VGSR preserves stability in a regime where the direct controller is already saturated.
+We further show that viability can be learned from decision-level features (test AUC $0.97$ under an episode-group split), enabling a learned gate that remains stable on held-out target directions.
+Ablations show that removing the gate inflates energy consumption by over $50\%$, confirming that gating---not the archive alone---is the critical component.
+Our results suggest that skill archives are most useful for locomotion when used as guarded command priors rather than raw action replay.
+\end{abstract}
+
+\keywords{skill discovery \and legged locomotion \and residual control \and quality-diversity archives \and reinforcement learning}
+
+\section{Introduction}
+\label{sec:intro}
+
+Deep reinforcement learning has produced remarkably capable low-level controllers for legged robots: massively parallel simulation makes it possible to train velocity-conditioned locomotion policies for quadrupeds and humanoids in minutes~\citep{rudin2022learning,makoviychuk2021isaac}, and such policies transfer to challenging real-world terrain~\citep{lee2020learning,miki2022learning,hwangbo2019learning}.
+At the same time, a long line of work on temporal abstraction argues that agents should \emph{reuse} behavior: options~\citep{sutton1999options,bacon2017option}, unsupervised skill discovery~\citep{eysenbach2019diversity,sharma2020dynamics}, skill priors extracted from offline data~\citep{pertsch2020spirl,ajay2021opal}, and quality-diversity behavior repertoires~\citep{mouret2015illuminating,cully2015robots,pugh2016quality} all build libraries of reusable behaviors.
+
+These two threads meet awkwardly in contact-rich locomotion.
+The natural way to reuse a discovered skill---replaying its action sequence as a temporally extended option---is brittle when the low-level dynamics are sensitive to feedback.
+We observe two dominant failure modes.
+First, \emph{initial-state mismatch}: when the state in which a skill was recorded differs from the current state, open-loop replay drives the robot into unrecoverable postures.
+Second, \emph{open-loop error accumulation}: even from a well-matched initial state, joint-action sequences diverge quickly on rough terrain, under different headings, or under different commanded speeds.
+A third, more practical obstacle is that \emph{the baseline is strong}: publicly available pretrained controllers, such as the RSL-RL policies distributed with Isaac Lab~\citep{mittal2023orbit,schwarke2025rslrl}, already solve many target-reaching locomotion tasks, so any behavior-reuse mechanism must demonstrate value \emph{on top of} a strong pretrained controller rather than against random or zero-action baselines.
+
+This paper asks a correspondingly sharpened question:
+\begin{quote}
+\emph{Can an action archive extracted from a converged locomotion policy serve as a test-time behavioral memory that helps a strong pretrained controller on harder goals---without destabilizing it?}
+\end{quote}
+
+We answer with \textbf{Viability-Gated Skill Residuals (VGSR)}, a test-time control framework with three components.
+(i)~\emph{RL-converged online archive}: instead of populating a skill library from random exploration, we collect rollouts from a converged locomotion policy, segment them into fixed-horizon chunks, describe each chunk with a body-frame locomotion descriptor, and maintain an online archive filtered by utility and descriptor novelty---close in spirit to a quality-diversity repertoire~\citep{cully2015robots}.
+(ii)~\emph{Command-space residuals}: at test time, archived chunks are never replayed as joint actions.
+The selected chunk's velocity descriptor is converted into a high-level velocity command that is \emph{blended} with the direct goal-directed command of a pretrained velocity-conditioned controller.
+The low-level policy retains full authority over posture, contacts, and joint control.
+(iii)~\emph{Viability gating}: the residual is activated only when it passes a viability gate checking goal alignment, predicted progress, chunk stability, an energy z-score, and a speed cap; otherwise the controller falls back to the direct command.
+We additionally train a lightweight viability classifier on logged decision features and show it can partially replace hand-tuned thresholds.
+
+We evaluate on Isaac Lab rough-terrain target-reaching with the Unitree Go2 quadruped and the H1 humanoid, using the public pretrained RSL-RL checkpoints as both the archive source and the low-level controller, and---critically---as the baseline.
+Our claims are deliberately calibrated to the evidence.
+On harder Go2 targets, a 100-episode-per-method aggregate shows that VGSR reduces the energy proxy ($1.99$ vs.\ $2.20$, bootstrap 95\% CIs $[1.88, 2.09]$ vs.\ $[2.08, 2.31]$) while preserving a marginal success advantage ($0.79$ vs.\ $0.78$); final distance and final height are not uniformly better.
+On H1 the direct controller is saturated and VGSR neither helps nor destabilizes.
+Gate ablations show that the unguarded residual inflates energy by over $50\%$, and a learned gate is stable on held-out target directions.
+We also report negative results---most notably a persistent low-height failure on long forward targets---because they delineate what post-hoc command gating can and cannot fix.
+
+\textbf{Contributions.}
+(1)~An online skill/action archive built from a \emph{converged} RL locomotion policy, with body-frame descriptors and utility-and-novelty filtering (Section~\ref{sec:archive}).
+(2)~A test-time control scheme that converts archived chunks into \emph{command-space residuals} over a pretrained low-level controller, avoiding open-loop action replay (Section~\ref{sec:residual}).
+(3)~A \emph{viability gate}---hand-designed and learned variants---that decides when the residual is safe and useful, together with an empirical study on Go2 and H1 rough-terrain tasks that honestly separates where VGSR helps (energy, marginal success on harder targets), where it is neutral (saturated H1), and where it fails (height-limited long targets) (Sections~\ref{sec:gate}--\ref{sec:results}).
+
+\section{Related Work}
+\label{sec:related}
+
+\textbf{Options and temporal abstraction.}
+The options framework~\citep{sutton1999options} formalizes temporally extended actions, and option-critic~\citep{bacon2017option} learns option policies end-to-end; data-efficient hierarchical RL further layers goal-conditioned controllers~\citep{nachum2018data}.
+VGSR shares the motivation of temporal abstraction but does not learn option policies from scratch: it extracts reusable chunks from an already-converged locomotion policy and reuses them only at the command level.
+
+\textbf{Unsupervised skill discovery.}
+DIAYN~\citep{eysenbach2019diversity} and DADS~\citep{sharma2020dynamics} discover diverse skills via information-theoretic objectives without task reward.
+Our archive is instead built from task-driven, converged-policy rollouts; diversity enters only through descriptor-space clustering, and the archive is explicitly filtered for utility and stability rather than diversity per se.
+
+\textbf{Skill priors from offline data.}
+SPiRL~\citep{pertsch2020spirl} and OPAL~\citep{ajay2021opal} learn latent skill spaces and priors from offline experience to accelerate downstream RL; ASE learns large-scale reusable embeddings for simulated characters~\citep{peng2022ase}.
+These methods train new high-level policies over the skill space.
+VGSR requires no downstream training: the archive is used directly at test time, and the ``prior'' takes the form of a gated command residual.
+
+\textbf{Quality-diversity repertoires.}
+MAP-Elites~\citep{mouret2015illuminating} and behavior repertoires enable rapid damage adaptation by searching a pre-built archive at deployment~\citep{cully2015robots,pugh2016quality}.
+VGSR borrows the descriptor-archive idea but differs in how the archive acts: rather than switching between archived controllers, archived chunks modulate the command input of a single pretrained policy.
+
+\textbf{Residual control.}
+Residual policy learning adds a learned corrective action on top of a base controller~\citep{silver2018residual,johannink2019residual}.
+VGSR is residual in command space rather than action space, and the residual is not learned by gradient descent---it is \emph{retrieved} from an archive and gated by viability checks.
+
+\textbf{Command-conditioned legged locomotion.}
+Massively parallel training yields robust velocity-tracking policies~\citep{rudin2022learning,makoviychuk2021isaac,mittal2023orbit,schwarke2025rslrl}, which transfer to harsh real terrain~\citep{lee2020learning,miki2022learning} and adapt online~\citep{kumar2021rma}; multiplicity-of-behavior training exposes gait diversity through command interfaces~\citep{margolis2022walk}.
+We treat such a policy as a fixed, strong low-level layer and study whether an archive distilled from its own converged behavior can improve it at test time.
+Recent imitation approaches also exploit action chunking~\citep{zhao2023learning}, but execute chunks closed-loop with dense sensing; our negative results (Section~\ref{sec:negative}) reinforce that raw chunk replay is unreliable for rough-terrain locomotion.
+
+The individual ingredients---archives, residuals, gating---are each established.
+The contribution here is the specific combination for contact-rich locomotion, evaluated directly against the strong pretrained controller it augments.
+
+\section{Method}
+\label{sec:method}
+
+VGSR has three stages: (i) building an online archive from a converged policy, (ii) selecting archive chunks at test time and converting them to command residuals, and (iii) gating residual activation by viability.
+Throughout, $\pi_\theta$ denotes a pretrained velocity-conditioned low-level policy that maps observations and a 3-D command $c = (v_x, v_y, \omega_z)$ (body-frame forward velocity, lateral velocity, yaw rate) to joint actions.
+
+\subsection{RL-Converged Online Skill Archive}
+\label{sec:archive}
+
+\textbf{Data collection.}
+We roll out the converged policy $\pi_\theta$ under its training command distribution and record observations, actions, rewards, base poses, base velocities, joint velocities, and termination flags.
+Trajectories are segmented into fixed-horizon chunks $\tau_i$ with a fixed stride.
+
+\textbf{Body-frame locomotion descriptors.}
+Each chunk is compressed into a descriptor $d_i$ expressed in the body frame of its initial state:
+horizontal displacement ($\Delta x, \Delta y$), yaw change ($\Delta \psi$), average forward/lateral velocity and yaw rate, mean body height and height standard deviation, mean action norm and joint-velocity norm, an energy proxy
+\begin{equation}
+e_i \;=\; \operatorname{mean}\bigl(\lvert a_t \odot \dot{q}_t \rvert\bigr),
+\label{eq:energy}
+\end{equation}
+a stability score combining posture, height, and termination statistics, and an action-difference smoothness score.
+Body-frame descriptors make ``walk forward,'' ``strafe,'' and ``turn'' invariant to world heading, so the same behavior clusters together across rollouts.
+Each chunk also stores an initial-state feature $f_i$ and a scalar utility $u_i$ aggregating reward, displacement, stability, smoothness, and energy.
+
+\textbf{Online archive update.}
+The archive retains at most $M$ chunks.
+Unstable chunks that are not descriptor-novel are filtered; the remainder are ranked by utility and the top-$M$ retained.
+Chunks are clustered by weighted $k$-means in descriptor space, with weights emphasizing motion outcomes ($\Delta x$, $\Delta y$, $\Delta \psi$, average velocities, yaw rate, stability, smoothness) and down-weighting energy and action norms so that near-identical motions are not split by energy noise.
+Central and high-utility representatives are kept per cluster.
+The result is a quality-diversity-style behavioral memory~\citep{cully2015robots} whose entries are, by construction, behaviors the converged policy can actually execute stably.
+Algorithm~\ref{alg:archive} summarizes the procedure.
+
+\begin{algorithm}[t]
+\caption{Build Online Action Archive from a Converged RL Policy}
+\label{alg:archive}
+\begin{algorithmic}[1]
+\Require converged policy $\pi_\theta$, environment $E$, horizon $H$, archive size $M$, clusters $K$
+\State Collect rollouts of $\pi_\theta$ in $E$; record observations, actions, rewards, poses, velocities, terminations
+\State Segment trajectories into fixed-horizon chunks $\{\tau_i\}$ with stride
+\For{each chunk $\tau_i$}
+  \State $d_i \gets$ body-frame locomotion descriptor of $\tau_i$; \quad $f_i \gets$ initial-state feature
+  \State $u_i \gets$ utility(reward, displacement, stability, smoothness, energy)
+\EndFor
+\State Filter unstable, non-novel chunks; keep top-$M$ by utility
+\State Cluster descriptors with weighted $k$-means ($K$ clusters, outcome-weighted dimensions)
+\State Keep central and high-utility representatives per cluster
+\Ensure archive $\mathcal{A} = \{(\tau_i, d_i, f_i, u_i, \text{skill}_i)\}$
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Archive Chunk Selection}
+\label{sec:selection}
+
+At test time the robot must reach a target position $g$.
+At each high-level step, the controller computes the body-frame target $g_{\text{body}}$ and scores every archive chunk $k$ by
+\begin{equation}
+\begin{aligned}
+J_k \;=\;& \hat{D}_k
+\;+\; \lambda_{\text{state}} \, \lVert f_{\text{now}} - f_k \rVert
+\;+\; \lambda_{\text{energy}} \, e_k
+\;+\; \lambda_{\text{stab}} \, (1 - s_k) \\
+&\;+\; \lambda_{\text{np}} \, \max(0, -\hat{P}_k)
+\;-\; \lambda_{\text{util}} \, z(u_k)
+\;-\; \lambda_{\text{prog}} \, \max(0, \hat{P}_k),
+\end{aligned}
+\label{eq:cost}
+\end{equation}
+where $\hat{D}_k$ is the predicted distance to the target after executing chunk $k$ (obtained by applying the chunk's body-frame displacement descriptor to the current pose), $\hat{P}_k$ is the predicted progress (current distance minus $\hat{D}_k$), $f_k$ is the chunk's initial-state feature, $e_k$ its energy proxy, $s_k$ its stability score, and $z(u_k)$ the archive-normalized utility.
+The state-distance term implements \emph{applicability}: chunks recorded in dissimilar states are penalized, addressing the initial-state-mismatch failure mode directly in the selection objective.
+Descriptor-based prediction plays the role of a one-step motion model without learning full dynamics.
+
+\subsection{Command-Space Residual Control}
+\label{sec:residual}
+
+The selected chunk $k^\ast = \arg\min_k J_k$ is \emph{not} replayed.
+Instead, its velocity descriptor is read out as a candidate command
+\begin{equation}
+c_{\text{skill}} \;=\; \bigl(\bar{v}_x^{(k^\ast)}, \; \bar{v}_y^{(k^\ast)}, \; \bar{\omega}_z^{(k^\ast)}\bigr),
+\end{equation}
+while the direct goal command is computed from the body-frame target as
+\begin{equation}
+c_{\text{goal}} \;=\; \bigl(\operatorname{clip}(k_v \, x_{\text{local}}), \; \operatorname{clip}(k_v \, y_{\text{local}}), \; \operatorname{clip}(k_\psi \operatorname{atan2}(y_{\text{local}}, x_{\text{local}}))\bigr).
+\end{equation}
+The executed command blends the two:
+\begin{equation}
+c \;=\; (1-\alpha)\, c_{\text{goal}} \;+\; \alpha\, c_{\text{skill}},
+\qquad
+\alpha \;=\;
+\begin{cases}
+\alpha_{\max} \operatorname{clip}\!\bigl(\nicefrac{\lVert g_{\text{body}} \rVert}{d_{\text{blend}}},\, 0,\, 1\bigr) & \text{if viable},\\[2pt]
+0 & \text{otherwise},
+\end{cases}
+\label{eq:blend}
+\end{equation}
+and $\pi_\theta$ executes with command $c$ for a short horizon before the next high-level step.
+The distance-proportional blend automatically anneals the residual near the goal.
+Because $\pi_\theta$ retains full control of posture, contacts, and joints, the archive can only bias \emph{where the policy is told to go}, never \emph{how it moves its joints}---this is the central design decision that separates VGSR from open-loop skill replay.
+
+\subsection{Viability Gating}
+\label{sec:gate}
+
+\textbf{Heuristic gate.}
+The residual is activated ($\alpha > 0$ in Eq.~\ref{eq:blend}) only if the candidate passes all of:
+(i)~\emph{alignment}: the skill command direction agrees with the goal direction, $\text{align}(c_{\text{skill}}, g_{\text{body}}) \ge \epsilon_a$;
+(ii)~\emph{progress}: predicted progress $\hat{P}_{k^\ast} \ge \epsilon_p$;
+(iii)~\emph{stability}: chunk stability $s_{k^\ast} \ge \epsilon_s$;
+(iv)~\emph{energy}: the chunk's energy z-score within the archive does not exceed $\epsilon_e$;
+(v)~\emph{speed cap}: $\lVert c_{\text{skill}} \rVert \le (1+\rho)\lVert c_{\text{goal}} \rVert$.
+A recovery clause keeps the controller active near the goal when body height is below a threshold fraction of nominal, prioritizing height recovery over premature stopping.
+On failure of any check, the controller falls back to the pure direct command---the pretrained policy is the safe default.
+
+\textbf{Learned viability discriminator.}
+To reduce threshold hand-tuning, we log every candidate decision during guarded evaluation and train a lightweight classifier $p_\phi$ mapping decision features to episode-level success.
+Features include current/predicted distance, predicted progress, state distance and its RBF applicability, utility, energy, stability, alignment, energy z-score, and the norms of both commands.
+To avoid merely cloning the heuristic, the deployable variant \emph{excludes} the heuristic gate's own outputs (its blend weight, accept flag, and low-height flag).
+Train/test splitting is by \emph{episode group}, so decisions from one episode never appear on both sides.
+At deployment the learned gate can \emph{replace} the heuristic, be \emph{union}-ed with it, or \emph{intersect} it; intersection---the learned model further filtering candidates that already pass the physical guard---is the most stable and is what we report.
+Algorithm~\ref{alg:control} summarizes the test-time loop.
+
+\begin{algorithm}[t]
+\caption{Viability-Gated Skill Residual Control}
+\label{alg:control}
+\begin{algorithmic}[1]
+\Require pretrained policy $\pi_\theta$, archive $\mathcal{A}$, target $g$, optional learned gate $p_\phi$
+\While{episode not done}
+  \State Observe state; compute body-frame target $g_{\text{body}}$ and direct command $c_{\text{goal}}$
+  \For{each chunk $k \in \mathcal{A}$}
+    \State Predict displacement from $d_k$; compute $\hat{D}_k$, $\hat{P}_k$, state applicability, and cost $J_k$ (Eq.~\ref{eq:cost})
+  \EndFor
+  \State $k^\ast \gets \arg\min_k J_k$; \quad $c_{\text{skill}} \gets$ velocity descriptor of $k^\ast$
+  \State $h \gets$ heuristic gate($k^\ast$): alignment $\wedge$ progress $\wedge$ stability $\wedge$ energy $\wedge$ speed cap
+  \If{learned gate enabled}
+    \State $h \gets h \wedge \bigl[p_\phi(\text{decision features}) \ge \eta\bigr]$ \Comment{intersect mode}
+  \EndIf
+  \State $\alpha \gets h \;?\; \alpha_{\max}\operatorname{clip}(\lVert g_{\text{body}}\rVert / d_{\text{blend}}, 0, 1) \;:\; 0$
+  \State Execute $\pi_\theta$ with $c = (1-\alpha)c_{\text{goal}} + \alpha c_{\text{skill}}$ for a short horizon
+\EndWhile
+\end{algorithmic}
+\end{algorithm}
+
+\section{Experimental Setup}
+\label{sec:setup}
+
+\textbf{Environments and robots.}
+All experiments use Isaac Lab~\citep{mittal2023orbit} rough-terrain velocity environments: \texttt{Isaac-Velocity-Rough-Unitree-Go2-v0} (quadruped) and \texttt{Isaac-Velocity-Rough-H1-v0} (humanoid).
+The low-level controller is the publicly distributed pretrained RSL-RL checkpoint for each task~\citep{rudin2022learning,schwarke2025rslrl}; the same checkpoint generates the archive rollouts.
+The task is target reaching: the robot must move its base to a target position $g$ specified relative to its start pose.
+
+\textbf{Target sets.}
+\emph{Moderate} Go2 targets: $(0.75,0)$, $(0.75,0.75)$, $(1.5,0)$, $(0,0.75)$ m.
+\emph{Harder} Go2 targets: $(2,0)$, $(1.5,1)$, $(0,1.25)$, $(-0.75,0)$, $(1,-1)$ m, including backward and lateral goals that the velocity-tracking training distribution covers less densely.
+\emph{Holdout} directions for learned-gate evaluation (never used for tuning): $(1.25,0.5)$, $(0.5,1)$, $(-0.5,0.5)$, $(1.25,-0.5)$ m.
+H1 targets: $(0.5,0)$, $(0.5,0.5)$, $(1,0)$ m.
+
+\textbf{Methods.}
+(1)~\texttt{direct}: the pretrained controller driven by the direct target command only---a strong baseline, not a strawman;
+(2)~\texttt{skill}: unguarded residual, i.e.\ Eq.~\ref{eq:blend} with the gate forced open;
+(3)~\texttt{VGSR}: heuristic-gated residual (with recovery clause on harder targets);
+(4)~\texttt{learned-VGSR}: heuristic gate intersected with the learned discriminator at threshold $\eta = 0.999$.
+We deliberately exclude random/zero-action baselines from the main comparison; they are sanity checks only, and beating them would say nothing given the strength of the pretrained controller.
+
+\textbf{Metrics.}
+Success rate (no early termination, final height above threshold, final XY distance below threshold); average final distance (m); average energy proxy (Eq.~\ref{eq:energy}); average final height (m); early-termination rate; and the number of high-level steps in which the residual was active.
+Note the success criterion includes a \emph{final-height} requirement: an episode that reaches the target XY neighborhood in a crouched posture fails.
+For the strengthened harder-target aggregate we report episode-level bootstrap 95\% confidence intervals.
+
+\section{Results}
+\label{sec:results}
+
+\subsection{Go2 Rough Terrain: Moderate Targets}
+\label{sec:moderate}
+
+Table~\ref{tab:moderate} reports 10 trials per target (40 episodes per method).
+VGSR attains a slightly higher success rate ($1.000$ vs.\ $0.975$) at equal final distance, with a small energy overhead.
+The takeaway is modest by design: on targets the pretrained controller already handles well, the gated residual does no harm---the gate correctly stays out of the way.
+
+\begin{table}[t]
+\centering
+\caption{Go2 rough terrain, moderate targets (10 trials $\times$ 4 targets). Arrows give the preferred direction.}
+\label{tab:moderate}
+\begin{tabular}{lccccc}
+\toprule
+Method & Success $\uparrow$ & Final dist.\ (m) $\downarrow$ & Energy $\downarrow$ & Final height (m) & Term.\ $\downarrow$ \\
+\midrule
+VGSR (ours) & \textbf{1.000} & 0.2892 & 1.8924 & 0.3588 & 0.000 \\
+direct      & 0.975 & 0.2893 & \textbf{1.8147} & 0.3604 & 0.000 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Go2 Rough Terrain: Harder Targets (Main Result)}
+\label{sec:harder}
+
+The initial 5-trial evaluation (25 episodes per method) that motivated the gate design showed VGSR improving success ($0.800$ vs.\ $0.760$), final distance ($0.2822$ vs.\ $0.2884$), and energy ($2.09$ vs.\ $2.39$).
+Because 25 episodes is too few for a headline claim, we strengthened the evaluation to 20 trials per target (100 episodes per method) by aggregating three seeds.
+Table~\ref{tab:harder} reports means with episode-level bootstrap 95\% CIs.
+
+\begin{table}[t]
+\centering
+\caption{Go2 rough terrain, harder targets, strengthened aggregate (20 trials $\times$ 5 targets $=$ 100 episodes per method; 3 seeds). Brackets are episode-level bootstrap 95\% CIs.}
+\label{tab:harder}
+\begin{tabular}{lcccc}
+\toprule
+Method & Success $\uparrow$ & Final dist.\ (m) $\downarrow$ & Energy $\downarrow$ & Final height (m) \\
+\midrule
+VGSR (ours) & \textbf{0.790} {\scriptsize$[0.710, 0.870]$} & 0.2979 {\scriptsize$[0.2749, 0.3370]$} & \textbf{1.9913} {\scriptsize$[1.8819, 2.0936]$} & 0.3071 {\scriptsize$[0.2885, 0.3237]$} \\
+direct      & 0.780 {\scriptsize$[0.700, 0.860]$} & \textbf{0.2888} {\scriptsize$[0.2874, 0.2902]$} & 2.1954 {\scriptsize$[2.0831, 2.3110]$} & 0.3174 {\scriptsize$[0.3027, 0.3313]$} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{go2_harder_strengthened_20trial_metrics.png}
+\caption{Go2 harder targets, strengthened 20-trial aggregate (100 episodes per method). VGSR reduces the energy proxy with overlapping-but-shifted CIs while success is marginally higher; final distance and final height are slightly worse, driven by the height-limited 2\,m forward target (Section~\ref{sec:negative}).}
+\label{fig:harder}
+\end{figure}
+
+Three observations, stated at the strength the data supports.
+\emph{First}, the energy improvement is the most consistent effect: $1.99$ vs.\ $2.20$ ($-9.3\%$), with CIs that barely overlap.
+The archive supplies locally better-matched motion priors---for example, committed lateral or turning commands where the proportional direct command produces inefficient in-place correction.
+\emph{Second}, the success advantage is marginal ($0.790$ vs.\ $0.780$, heavily overlapping CIs): the initial 5-trial gap of $+0.04$ did not survive aggregation, and we report this honestly rather than leaning on the favorable seed.
+\emph{Third}, VGSR's final distance and height are slightly worse on average; both effects trace mostly to the 2\,m forward target where episodes approach the XY goal but fail the height criterion (Section~\ref{sec:negative}).
+Figure~\ref{fig:harder} visualizes the aggregate; Figure~\ref{fig:traj} shows representative trajectories.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.95\linewidth]{go2_guarded_skill_command_v1_recovery_harder_trajectories.png}
+\caption{Go2 harder-target trajectories (blue: VGSR; red: direct). Both controllers reach the target neighborhood (green circle) on most targets; qualitative differences are largest on the diagonal $(1.5,1)$ and lateral $(0,1.25)$ goals where the residual commits to smoother approach paths.}
+\label{fig:traj}
+\end{figure}
+
+\subsection{Gate Ablation: Is the Gate Necessary?}
+\label{sec:ablation}
+
+Table~\ref{tab:gate} isolates the gate's contribution on harder targets (5 trials, seed 102).
+The unguarded residual (\texttt{skill}) gets closest to the target ($0.2739$ m) but at an energy of $3.18$---more than $50\%$ above either gated variant---because it fires the residual in $18.6$ high-level steps per episode on average, nearly twice the gated rate ($10.3$).
+The heuristic gate restores energy parity with the direct controller ($2.08$ vs.\ $2.10$) while keeping most of the distance benefit.
+On this seed the direct controller has the best success rate ($0.92$), and VGSR suffered one early termination on the 2\,m target: the gate is \emph{necessary} to suppress high-energy overuse of the archive, but the current heuristic form is \emph{not sufficient} for a uniform win---consistent with the aggregate picture in Table~\ref{tab:harder}.
+
+\begin{table}[t]
+\centering
+\caption{Gate ablation on Go2 harder targets (5 trials $\times$ 5 targets, seed 102). ``Resid.\ used'' is the average number of high-level steps with an active residual.}
+\label{tab:gate}
+\begin{tabular}{lcccccc}
+\toprule
+Method & Success $\uparrow$ & Final dist.\ (m) $\downarrow$ & Energy $\downarrow$ & Final height (m) & Term.\ $\downarrow$ & Resid.\ used \\
+\midrule
+skill (no gate) & 0.800 & \textbf{0.2739} & 3.1806 & 0.3205 & 0.000 & 18.64 \\
+VGSR (ours)     & 0.840 & 0.3570 & \textbf{2.0802} & 0.3278 & 0.040 & 10.28 \\
+direct          & \textbf{0.920} & 0.2889 & 2.0988 & \textbf{0.3372} & 0.000 & 0.00 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Learned Viability Gate}
+\label{sec:learned}
+
+\textbf{Can viability be learned?}
+Training on 2{,}879 logged decisions across 90 episode groups with an episode-group split (1{,}900 train / 979 test decisions; 68/22 groups), the deployable classifier---with all heuristic-gate outputs excluded from its inputs---reaches test accuracy $0.913$ and test AUC $0.973$.
+Decision-level features therefore carry substantial viability signal beyond the hand-designed thresholds.
+
+\textbf{Held-out directions.}
+On four holdout targets (Table~\ref{tab:holdout}), all methods are saturated at success $1.0$; learned-VGSR (intersect, $\eta = 0.999$) reduces energy relative to heuristic VGSR ($1.9096$ vs.\ $1.9346$) and raises final height, while remaining statistically indistinguishable from the direct controller.
+The learned gate is \emph{stable} on directions it never saw---the key deployment property---though not yet clearly better than direct control here.
+
+\begin{table}[t]
+\centering
+\caption{Learned-gate evaluation on holdout target directions (5 trials $\times$ 4 targets).}
+\label{tab:holdout}
+\begin{tabular}{lccccc}
+\toprule
+Method & Success $\uparrow$ & Final dist.\ (m) $\downarrow$ & Energy $\downarrow$ & Final height (m) & Resid.\ used \\
+\midrule
+learned-VGSR (intersect) & 1.000 & 0.2911 & \textbf{1.9096} & \textbf{0.3622} & 8.30 \\
+VGSR (heuristic)         & 1.000 & \textbf{0.2877} & 1.9346 & 0.3577 & 10.50 \\
+direct                   & 1.000 & 0.2890 & 1.9063 & 0.3585 & 0.00 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Harder targets expose the label problem.}
+On harder targets (Table~\ref{tab:learnedharder}, seed 103), learned-VGSR achieves the best final distance ($0.2779$) and energy ($1.9232$) but the \emph{worst} success ($0.760$), losing episodes on the 2\,m forward target through the height criterion.
+The diagnosis is instructive: episode-level success labels teach the classifier that ``low-energy, goal-approaching'' decisions are good, which correlates with---but is not identical to---``arriving at a safe height.''
+The learned gate optimizes the correlation and misses the causal requirement.
+Mode ablations reinforce the point: \texttt{replace} mode at threshold $0.5$ over-accepts residuals and underperforms direct control; even at $0.999$ it remains too aggressive.
+Intersection with the physical guard is currently the only reliable deployment mode.
+
+\begin{table}[t]
+\centering
+\caption{Learned gate on Go2 harder targets (5 trials $\times$ 5 targets, seed 103).}
+\label{tab:learnedharder}
+\begin{tabular}{lccccc}
+\toprule
+Method & Success $\uparrow$ & Final dist.\ (m) $\downarrow$ & Energy $\downarrow$ & Final height (m) & Resid.\ used \\
+\midrule
+learned-VGSR (intersect) & 0.760 & \textbf{0.2779} & \textbf{1.9232} & 0.3093 & 7.76 \\
+VGSR (heuristic)         & \textbf{0.800} & 0.2865 & 2.0267 & 0.3180 & 8.52 \\
+direct                   & \textbf{0.800} & 0.2896 & 2.0812 & \textbf{0.3333} & 0.00 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Cross-Embodiment: H1 Humanoid}
+\label{sec:h1}
+
+On H1 rough-terrain targets (Table~\ref{tab:h1}), the direct controller is already saturated (success $1.0$), leaving no headroom.
+VGSR matches success and final distance (marginally better, $0.2905$ vs.\ $0.2911$), stands slightly taller, and costs slightly more energy.
+We present this strictly as a \emph{stability-of-transfer} result: the same archive pipeline, descriptors, and gate applied to a humanoid neither destabilize the controller nor degrade its performance.
+It is not evidence of improvement, and we do not claim any.
+
+\begin{table}[t]
+\centering
+\caption{H1 humanoid, rough terrain (5 trials $\times$ 3 targets). The direct controller is saturated; the result demonstrates transfer stability, not improvement.}
+\label{tab:h1}
+\begin{tabular}{lccccc}
+\toprule
+Method & Success & Final dist.\ (m) $\downarrow$ & Energy $\downarrow$ & Final height (m) & Term.\ $\downarrow$ \\
+\midrule
+VGSR (ours) & 1.000 & \textbf{0.2905} & 0.5394 & 1.0169 & 0.000 \\
+direct      & 1.000 & 0.2911 & \textbf{0.4971} & 1.0091 & 0.000 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Negative Results and Failure Modes}
+\label{sec:negative}
+
+We report five negative results that shaped the design and bound the claims.
+
+\textbf{(1) Raw action replay fails.}
+Replaying archived joint-action chunks open-loop---the classic ``skill as option'' execution---reliably destabilizes both Go2 and H1 on rough terrain, through the initial-state-mismatch and error-accumulation modes of Section~\ref{sec:intro}.
+This failure is why VGSR operates in command space at all.
+
+\textbf{(2) The 2\,m forward target is height-limited.}
+On long forward targets the robot frequently reaches the XY neighborhood but finishes below the height threshold and fails.
+Reactive low-height gates were tested at two settings: an aggressive variant preserves height but suppresses useful progress; a balanced variant preserves energy but still fails the height criterion.
+Post-hoc command gating is too late once the base policy has entered a crouched, low-viability regime---recovery must be predicted \emph{before} it is needed, not reacted to.
+
+\textbf{(3) Learned gate in replace mode over-accepts} (Section~\ref{sec:learned}), at both $\eta = 0.5$ and $\eta = 0.999$.
+
+\textbf{(4) Weaker blending is not automatically safer.}
+Lowering the residual blend cap to $0.25$ caused an unstable right-diagonal holdout target in one seed; residual strength and gating interact nonlinearly, so ``smaller residual'' is not a substitute for a better gate.
+
+\textbf{(5) The archive alone is not the contribution.}
+Table~\ref{tab:gate} shows that an ungated archive is a net negative on energy.
+Any claim that a skill archive helps locomotion must be paired with an activation mechanism; in our experiments the gate, not the archive, is the binding constraint.
+
+\section{Limitations and Future Work}
+\label{sec:limitations}
+
+\textbf{Scope of the empirical claim.}
+The positive result is an energy reduction with a marginal success advantage on harder Go2 targets against a strong pretrained controller, plus gate-ablation and holdout-stability evidence.
+It is not an across-the-board win: final distance and height are not uniformly better, H1 shows no improvement, and one gate-ablation seed favors the direct controller on success.
+Evaluations use 25--100 episodes per method per setting; wider multi-seed sweeps would tighten the intervals.
+
+\textbf{Episode-level viability labels are too coarse.}
+The learned gate's failure on the 2\,m target traces to labels that reward correlates of success rather than height-safe arrival.
+The natural fix is short-horizon labels: for each logged decision, compare executing the residual versus the direct command over the next $N$ steps on progress, height safety, and energy-normalized progress, turning the discriminator into a genuine applicability model.
+
+\textbf{Post-hoc gating cannot rescue an unviable base state.}
+Once the low-level policy is crouched, no command filter recovers it (negative result 2).
+Complementary directions: a viability model that predicts height collapse before residual execution, or a base policy trained with stronger upright-recovery objectives.
+
+\textbf{Breadth.}
+All results are in simulation, on target reaching, with one archive configuration per robot.
+Archive-size ablations, path following, disturbance recovery, stairs/slopes, and hardware transfer are open.
+The framework is low-level-controller-agnostic in principle---any velocity-conditioned policy exposes the required interface~\citep{margolis2022walk,kumar2021rma}---but we have only instantiated RSL-RL checkpoints.
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+We presented VGSR, a test-time framework that turns rollouts of a converged locomotion policy into an online behavioral archive and reuses that archive as viability-gated, command-space residuals over the same pretrained controller.
+Across Isaac Lab rough-terrain experiments the evidence supports a calibrated conclusion: raw action replay is unreliable; command-space residuals are the right interface; viability gating is necessary to prevent energetic overuse of the archive; and the combination yields consistent energy savings with marginal success gains on harder Go2 targets while remaining neutral on a saturated H1 task.
+Viability itself is learnable from decision features, though episode-level labels are not yet sufficient for height-safe deployment.
+The broader suggestion is that for contact-rich locomotion, skill archives are best understood not as libraries of replayable behaviors but as \emph{guarded command priors} over strong low-level controllers.
+
+\subsubsection*{Reproducibility}
+All experiments use public Isaac Lab environments and public pretrained RSL-RL checkpoints.
+Archive construction, evaluation, viability-model training, and plotting code, together with all result files aggregated in this paper, are available in the project repository.
+
+\bibliographystyle{unsrtnat}
+\bibliography{references}
+
+\end{document}
