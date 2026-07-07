@@ -32,6 +32,9 @@ class CompositionResult:
     num_skills_used: int
     energy_proxy: float
     base_positions: np.ndarray  # (T, 3) world-frame trace of env 0
+    terminated_early: bool = False
+    final_height: float = 0.0
+    min_height: float = 0.0
 
 
 class GreedySkillComposer:

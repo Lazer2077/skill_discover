@@ -58,6 +58,7 @@ recorded outcome as a deterministic dynamics model, with cost
 ├── configs/                  # YAML configs (default / ant / go2)
 ├── scripts/
 │   ├── collect_exploration.py        # 1. run Isaac Lab, collect rollouts
+│   ├── gym_online_skill_control.py   # Gymnasium V2 online action-set test
 │   ├── extract_descriptors.py        # 2. segment + descriptors (no sim needed)
 │   ├── cluster_skills.py             # 3. cluster + build skill library (no sim)
 │   ├── evaluate_skill_composition.py # 4. target reaching by skill composition
@@ -177,6 +178,79 @@ outputs/online_v2_ant/state_skill_discriminator.pt   # learned applicability mod
 outputs/online_v2_ant/online_history.json            # per-iteration update/discriminator stats
 outputs/online_v2_ant/online_v2_summary.json         # final evaluation summary
 ```
+
+### 5.2 Gymnasium control smoke tests
+
+`scripts/gym_online_skill_control.py` ports the V2 online action-set idea to
+standard Gymnasium continuous-control environments.  It is useful when Isaac
+Lab is unavailable or when you want a fast diagnostic loop:
+
+```bash
+python scripts/gym_online_skill_control.py \
+  --env Pendulum-v1 \
+  --online_iterations 5 \
+  --episodes_per_iter 20 \
+  --eval_episodes 10 \
+  --output outputs/gym_online_skill_control/pendulum_summary.json
+
+python scripts/gym_online_skill_control.py \
+  --env MountainCarContinuous-v0 \
+  --max_episode_steps 999 \
+  --online_iterations 5 \
+  --episodes_per_iter 20 \
+  --eval_episodes 10 \
+  --output outputs/gym_online_skill_control/mountaincar_summary.json
+```
+
+The Gym script reports:
+
+- `skill_mpc`: local skill-space MPC with the learned outcome model and
+  discriminator/RBF applicability.
+- `nearest_chunk`: state-conditioned nearest-neighbor replay from the
+  action-set archive.  This is the most direct diagnostic for "does the
+  learned action set preserve a converged controller?"
+- `elite_replay`: replay of successful full-episode action sequences found by
+  online exploration, used to diagnose whether the action set found a
+  long-horizon solution even when local skill composition fails.
+- `rl_policy`: the converged RL policy baseline, reported when
+  `--source_policy rl` is used.
+- `random_action` and `zero_action`: simple baselines.
+
+On the current machine, MuJoCo tasks were not available, but built-in
+Gymnasium tasks ran without extra dependencies.
+
+For control-quality experiments, prefer the RL-first path: train an RL policy
+to a task threshold, then extract skills/action chunks from that converged
+policy's rollouts.  By default, the script refuses to compute skills if the RL
+policy did not reach the target reward.
+
+```bash
+python -m pip install "stable-baselines3==2.3.2"
+
+python scripts/gym_online_skill_control.py \
+  --source_policy rl \
+  --env Pendulum-v1 \
+  --rl_algo SAC \
+  --rl_train_steps 50000 \
+  --rl_eval_freq 5000 \
+  --rl_min_steps_before_stop 15000 \
+  --rl_patience_evals 2 \
+  --rl_target_reward -250 \
+  --rl_collect_episodes 100 \
+  --chunk_horizon 1 \
+  --max_archive_size 20000 \
+  --max_skills 16 \
+  --eval_episodes 10 \
+  --output outputs/gym_online_skill_control/pendulum_rl_converged_h1_summary.json
+```
+
+In the local Pendulum run, SAC reached the convergence gate after 20k steps
+with final evaluation mean `-122.24`.  Extracting a single-step action set
+from 100 converged-policy rollouts gave `nearest_chunk` mean return `-167.51`
+versus the original `rl_policy` mean `-178.41`.  In contrast, using 16-step
+open-loop chunks with `skill_mpc` remained poor (`≈ -1043`), which indicates
+that high-control tasks need either short action-set elements or learned
+closed-loop skills rather than long open-loop chunks.
 
 **Expected outputs**
 

@@ -9,3 +9,6 @@ tqdm>=4.65
 
 # Optional: density-based clustering backend for SkillClusterer(method="hdbscan")
 # hdbscan>=0.8
+
+# Optional: Gymnasium RL-first skill extraction (--source_policy rl)
+# stable-baselines3==2.3.2

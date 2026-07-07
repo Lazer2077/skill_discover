@@ -100,7 +100,13 @@ class IsaacEnvWrapper:
     # Construction
     # ------------------------------------------------------------------
     @classmethod
-    def create(cls, task: str, num_envs: int, device: str = "cuda:0") -> "IsaacEnvWrapper":
+    def create(
+        cls,
+        task: str,
+        num_envs: int,
+        device: str = "cuda:0",
+        seed: int | None = None,
+    ) -> "IsaacEnvWrapper":
         """Create an Isaac Lab env by task name. Requires a running SimulationApp."""
         import gymnasium as gym
 
@@ -118,6 +124,8 @@ class IsaacEnvWrapper:
             )
 
         env_cfg = parse_env_cfg(task, device=device, num_envs=num_envs)
+        if seed is not None:
+            env_cfg.seed = int(seed)
         env = gym.make(task, cfg=env_cfg)
         logger.info("Created task '%s' with %d envs on %s", task, num_envs, device)
         return cls(env, device=device)
