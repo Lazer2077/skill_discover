@@ -1,7 +1,9 @@
-"""Unsupervised Skill Discovery and Skill-Space Control for Locomotion.
+"""Viability-Gated Feedforward Compensation (VGFC) for learned continuous-control policies.
 
-V1 research prototype for Isaac Lab:
-    explore -> segment -> describe -> cluster -> library -> compose.
+Core pipeline: excite a converged policy -> identify its command-response model ->
+invert the model at the command interface behind viability gates. The package also
+contains the retrieval-based variant (VGSR): an online archive of behavior chunks
+with body-frame outcome descriptors, reused as gated command residuals.
 """
 
-__version__ = "0.1.0"
+__version__ = "1.0.0"

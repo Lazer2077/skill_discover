@@ -19,7 +19,8 @@
 
 \graphicspath{{figures/}}
 
-\title{Viability-Gated Skill Residuals for Test-Time Locomotion Control}
+\title{Viability-Gated Feedforward Compensation of Learned Continuous-Control Policies}
+\renewcommand{\shorttitle}{Viability-Gated Feedforward Compensation}
 
 \author{
   Zongtan Li \\
@@ -32,468 +33,514 @@
 \maketitle
 
 \begin{abstract}
-Skill discovery can produce reusable temporal abstractions, but directly replaying open-loop action chunks is brittle for contact-rich legged locomotion.
-We introduce \emph{Viability-Gated Skill Residuals} (VGSR), a test-time control framework that builds an online archive from a converged locomotion policy and reuses archived behaviors as command-space residuals over a pretrained low-level controller.
-At each high-level step, VGSR selects archive chunks using predicted goal progress and state applicability, converts the selected chunk into a velocity-command prior, and activates it only when a viability gate predicts that the residual is goal-aligned, stable, and energetically in-distribution.
-In Isaac Lab rough-terrain experiments, VGSR improves a strong pretrained Unitree Go2 controller on harder target-reaching tasks, reducing an energy proxy by $9.3\%$ ($1.99$ vs.\ $2.20$) while maintaining a small success-rate advantage ($0.79$ vs.\ $0.78$) in a 20-trial-per-target aggregate of 100 episodes per method.
-On the H1 humanoid, VGSR preserves stability in a regime where the direct controller is already saturated.
-We further show that viability can be learned from decision-level features (test AUC $0.97$ under an episode-group split), enabling a learned gate that remains stable on held-out target directions.
-Ablations show that removing the gate inflates energy consumption by over $50\%$, confirming that gating---not the archive alone---is the critical component.
-Our results suggest that skill archives are most useful for locomotion when used as guarded command priors rather than raw action replay.
+Learned continuous-control policies are rarely uniformly good: even a converged reinforcement-learning controller retains systematic deficiencies such as energy-inefficient command tracking, undertrained command regions, and posture degradation on long tasks.
+We study \emph{compensation}: improving a fixed learned action policy using its own behavioral experience, without retraining it.
+Borrowing the structure of classical feedforward compensation, we identify a \emph{command-response model} of the closed loop formed by the policy and its plant: a network trained on excitation rollouts of the converged policy that predicts, from the current observation and a candidate command, the short-horizon response: body-frame displacement, energy, and terrain-relative posture height.
+At deployment, \emph{Viability-Gated Feedforward Compensation} (VGFC) inverts this model over a candidate command set: it selects the lowest-predicted-energy command that preserves the direct goal command's predicted progress, subject to a predictive viability gate that rejects commands whose predicted posture height violates a safety floor, catching height collapse \emph{before} it happens rather than reacting to it.
+In Isaac Lab rough-terrain experiments on Unitree Go2, VGFC systematically improves the energy economy of the pretrained controller it compensates: across an eight-target benchmark and moderate and held-out target sets it reduces the energy proxy by $5$--$11\%$ (non-overlapping bootstrap CIs on the main benchmark, $n{=}400$ per method) while success remains statistically matched, and the paired per-seed energy difference is negative on every one of 14 evaluation seeds (sign test $p < 10^{-4}$).
+On a second embodiment, the ANYmal-D quadruped, the identical frozen recipe transfers with no re-tuning of any parameter ($-3.9\%$ energy at matched success); on the H1 humanoid, whose baseline is already energy-efficient, the uncertainty-aware margin correctly keeps compensation nearly inactive.
+Component ablations show the design is load-bearing: removing the viability gate forfeits most of the realized saving, unbounding the correction trades success for energy, and a retrieval-based variant (archived behavior chunks reused as gated command residuals) captures only part of the gains and degrades off the archive's support.
+Compensation, not replay: a policy's own experience is most useful as an inverted response model behind a viability gate.
 \end{abstract}
 
-\keywords{skill discovery \and legged locomotion \and residual control \and quality-diversity archives \and reinforcement learning}
+\keywords{policy compensation \and feedforward control \and learned dynamics models \and continuous control \and legged locomotion \and skill archives}
 
 \section{Introduction}
 \label{sec:intro}
 
-Deep reinforcement learning has produced remarkably capable low-level controllers for legged robots: massively parallel simulation makes it possible to train velocity-conditioned locomotion policies for quadrupeds and humanoids in minutes~\citep{rudin2022learning,makoviychuk2021isaac}, and such policies transfer to challenging real-world terrain~\citep{lee2020learning,miki2022learning,hwangbo2019learning}.
-At the same time, a long line of work on temporal abstraction argues that agents should \emph{reuse} behavior: options~\citep{sutton1999options,bacon2017option}, unsupervised skill discovery~\citep{eysenbach2019diversity,sharma2020dynamics}, skill priors extracted from offline data~\citep{pertsch2020spirl,ajay2021opal}, and quality-diversity behavior repertoires~\citep{mouret2015illuminating,cully2015robots,pugh2016quality} all build libraries of reusable behaviors.
+Learning-based continuous control has matured to the point where strong pretrained policies are commodities: massively parallel simulation trains velocity-conditioned locomotion controllers for quadrupeds and humanoids in minutes~\citep{rudin2022learning,makoviychuk2021isaac}, and such policies transfer to challenging real-world terrain~\citep{lee2020learning,miki2022learning,hwangbo2019learning}.
+Yet a converged policy is not a uniformly good policy.
+Its competence mirrors its training distribution: command tracking is energy-inefficient in regions the curriculum visited rarely; aggressive proportional commands waste effort on terrain where they mostly produce slip; and on long tasks the policy can drift into low-posture regimes it was never penalized for entering.
+The standard remedies (reward reshaping, curriculum redesign, fine-tuning) all require another pass of training, with its cost and its risk of regressing behaviors that already work.
 
-These two threads meet awkwardly in contact-rich locomotion.
-The natural way to reuse a discovered skill---replaying its action sequence as a temporally extended option---is brittle when the low-level dynamics are sensitive to feedback.
-We observe two dominant failure modes.
-First, \emph{initial-state mismatch}: when the state in which a skill was recorded differs from the current state, open-loop replay drives the robot into unrecoverable postures.
-Second, \emph{open-loop error accumulation}: even from a well-matched initial state, joint-action sequences diverge quickly on rough terrain, under different headings, or under different commanded speeds.
-A third, more practical obstacle is that \emph{the baseline is strong}: publicly available pretrained controllers, such as the RSL-RL policies distributed with Isaac Lab~\citep{mittal2023orbit,schwarke2025rslrl}, already solve many target-reaching locomotion tasks, so any behavior-reuse mechanism must demonstrate value \emph{on top of} a strong pretrained controller rather than against random or zero-action baselines.
+Classical control has a name for the alternative: \emph{feedforward compensation}.
+When a plant exhibits known systematic error, one identifies a model of its response and uses the inverse of that model to pre-correct the reference signal, before feedback ever has to react~\citep{astrom2008feedback,francis1976internal}.
+This paper develops the analogous construction for learned continuous-control policies.
+The ``plant'' is the closed loop formed by the frozen policy and the robot; the ``reference'' is the high-level command the policy was trained to consume; and the ``model'' is learned from the policy's own rollouts, the same self-generated experience that skill-discovery and behavior-archive methods~\citep{eysenbach2019diversity,cully2015robots,pertsch2020spirl} would distill into replayable skills.
+Where those methods reuse experience by \emph{replaying} it (an approach we show is brittle for contact-rich control), we reuse it by \emph{identifying the system it came from}, then inverting that model at the command interface.
 
-This paper asks a correspondingly sharpened question:
-\begin{quote}
-\emph{Can an action archive extracted from a converged locomotion policy serve as a test-time behavioral memory that helps a strong pretrained controller on harder goals---without destabilizing it?}
-\end{quote}
+Concretely, we introduce \textbf{Viability-Gated Feedforward Compensation (VGFC)}, with three components.
+(i)~\emph{Command-response model}: we excite the converged policy with uniformly sampled velocity commands across many parallel environments, in the manner of system identification with rich excitation, and train a network that maps the current observation and a candidate command to the short-horizon closed-loop response: body-frame displacement and yaw change, per-step energy, and posture height measured \emph{relative to terrain}.
+(ii)~\emph{Feedforward inversion}: at each high-level step, VGFC evaluates a candidate command set spanning speeds, approach angles, and yaw rates, and selects the candidate with the lowest predicted energy among those that retain at least a fixed fraction of the direct goal command's predicted progress.
+(iii)~\emph{Predictive viability gating}: candidates whose predicted minimum posture height violates a safety floor are rejected \emph{before execution}; if the direct command itself is predicted to violate the floor, VGFC switches to a rescue mode that maximizes predicted posture height; and if measured posture has already sagged, compensation is suspended so the policy's aggressive tracking can restore it.
+The learned policy remains the safe default at every branch: compensation degrades to no-op, never to open-loop behavior.
 
-We answer with \textbf{Viability-Gated Skill Residuals (VGSR)}, a test-time control framework with three components.
-(i)~\emph{RL-converged online archive}: instead of populating a skill library from random exploration, we collect rollouts from a converged locomotion policy, segment them into fixed-horizon chunks, describe each chunk with a body-frame locomotion descriptor, and maintain an online archive filtered by utility and descriptor novelty---close in spirit to a quality-diversity repertoire~\citep{cully2015robots}.
-(ii)~\emph{Command-space residuals}: at test time, archived chunks are never replayed as joint actions.
-The selected chunk's velocity descriptor is converted into a high-level velocity command that is \emph{blended} with the direct goal-directed command of a pretrained velocity-conditioned controller.
-The low-level policy retains full authority over posture, contacts, and joint control.
-(iii)~\emph{Viability gating}: the residual is activated only when it passes a viability gate checking goal alignment, predicted progress, chunk stability, an energy z-score, and a speed cap; otherwise the controller falls back to the direct command.
-We additionally train a lightweight viability classifier on logged decision features and show it can partially replace hand-tuned thresholds.
-
-We evaluate on Isaac Lab rough-terrain target-reaching with the Unitree Go2 quadruped and the H1 humanoid, using the public pretrained RSL-RL checkpoints as both the archive source and the low-level controller, and---critically---as the baseline.
-Our claims are deliberately calibrated to the evidence.
-On harder Go2 targets, a 100-episode-per-method aggregate shows that VGSR reduces the energy proxy ($1.99$ vs.\ $2.20$, bootstrap 95\% CIs $[1.88, 2.09]$ vs.\ $[2.08, 2.31]$) while preserving a marginal success advantage ($0.79$ vs.\ $0.78$); final distance and final height are not uniformly better.
-On H1 the direct controller is saturated and VGSR neither helps nor destabilizes.
-Gate ablations show that the unguarded residual inflates energy by over $50\%$, and a learned gate is stable on held-out target directions.
-We also report negative results---most notably a persistent low-height failure on long forward targets---because they delineate what post-hoc command gating can and cannot fix.
+We instantiate VGFC on legged locomotion, the domain where feedback sensitivity makes naive skill reuse fail most sharply, using Isaac Lab rough-terrain target reaching with three embodiments: the Unitree Go2 and ANYmal-D quadrupeds and the H1 humanoid, with the public pretrained RSL-RL checkpoints as the compensated policies and as the baselines.
+Across \emph{all} evaluated task families (an eight-target Go2 benchmark plus moderate and held-out sets; ANYmal-D on the same benchmark; H1 targets), VGFC reduces energy at statistically matched success, and the paired per-seed energy difference is negative on every Go2 and ANYmal-D evaluation seed; on ANYmal-D the frozen configuration transfers with zero re-tuning.
+We additionally report component ablations that map the failure modes of naive model inversion (without the viability gate, predicted savings fail to materialize in the closed loop; without the bounded correction, the compensator trades success for energy) and an extensive study of the \emph{retrieval-based} alternative (archived chunks converted to gated command residuals, the natural evolution of skill-archive methods), which captures a smaller energy improvement and degrades off the archive's support.
+The gate is in the name because the ablations show it is load-bearing.
 
 \textbf{Contributions.}
-(1)~An online skill/action archive built from a \emph{converged} RL locomotion policy, with body-frame descriptors and utility-and-novelty filtering (Section~\ref{sec:archive}).
-(2)~A test-time control scheme that converts archived chunks into \emph{command-space residuals} over a pretrained low-level controller, avoiding open-loop action replay (Section~\ref{sec:residual}).
-(3)~A \emph{viability gate}---hand-designed and learned variants---that decides when the residual is safe and useful, together with an empirical study on Go2 and H1 rough-terrain tasks that honestly separates where VGSR helps (energy, marginal success on harder targets), where it is neutral (saturated H1), and where it fails (height-limited long targets) (Sections~\ref{sec:gate}--\ref{sec:results}).
+(1)~A \emph{feedforward-compensation framing} for improving fixed learned continuous-control policies: identify the closed-loop command response from self-generated excitation data, then invert it at the command interface at deployment, with no retraining and no action-space intervention (Sections~\ref{sec:model}--\ref{sec:vgfc}).
+(2)~A \emph{predictive viability gate} built on terrain-relative posture prediction, which anticipates height collapse before residual execution; we show terrain-relative labels are essential, raising posture-prediction $R^2$ from $0.25$ to $0.88$ over world-frame labels (Section~\ref{sec:model}).
+(3)~A systematic empirical study on Go2, ANYmal-D, and H1 rough terrain, with multiple seeds, tuning/evaluation seed separation, paired per-seed statistics, per-target analysis, and control examples, showing seed-consistent energy reductions at statistically matched success on every task family, including zero-re-tuning transfer to ANYmal-D (Section~\ref{sec:results}).
+(4)~Component ablations of the compensator itself and a characterization of the \emph{retrieval-based alternative} (viability-gated skill residuals from a quality-diversity-style archive), delineating why compensation needs a model, a constraint, a gate, and a bounded correction, and what each contributes (Sections~\ref{sec:results-retrieval},~\ref{sec:ablation-vgfc}).
 
 \section{Related Work}
 \label{sec:related}
 
-\textbf{Options and temporal abstraction.}
-The options framework~\citep{sutton1999options} formalizes temporally extended actions, and option-critic~\citep{bacon2017option} learns option policies end-to-end; data-efficient hierarchical RL further layers goal-conditioned controllers~\citep{nachum2018data}.
-VGSR shares the motivation of temporal abstraction but does not learn option policies from scratch: it extracts reusable chunks from an already-converged locomotion policy and reuses them only at the command level.
+\textbf{Feedforward and internal-model control.}
+Feedforward compensation pre-corrects a reference using a plant model, leaving feedback to handle residual error~\citep{astrom2008feedback}; the internal model principle formalizes why regulation requires a model of the signals to be tracked or rejected~\citep{francis1976internal}.
+VGFC transports this structure to learned policies: the ``plant'' is the policy-robot closed loop, the model is a learned network, and inversion is a discrete search over the command set.
+The novelty is not the control-theoretic template but its instantiation on top of a frozen RL policy, with the model identified from the policy's own rollouts.
 
-\textbf{Unsupervised skill discovery.}
-DIAYN~\citep{eysenbach2019diversity} and DADS~\citep{sharma2020dynamics} discover diverse skills via information-theoretic objectives without task reward.
-Our archive is instead built from task-driven, converged-policy rollouts; diversity enters only through descriptor-space clustering, and the archive is explicitly filtered for utility and stability rather than diversity per se.
+\textbf{Learned dynamics models and MPC.}
+Model-based RL learns dynamics models for planning or policy optimization~\citep{nagabandi2018neural}.
+VGFC's response model differs in \emph{what} it models: not the robot's raw action-level dynamics but the short-horizon response of the \emph{closed loop}, policy included, to its command input.
+This makes the model low-dimensional at the interface (a 3-D velocity command), cheap to invert by enumeration, and inherently respectful of the policy's competence: the search space is ``commands the policy understands,'' not raw torques.
 
-\textbf{Skill priors from offline data.}
-SPiRL~\citep{pertsch2020spirl} and OPAL~\citep{ajay2021opal} learn latent skill spaces and priors from offline experience to accelerate downstream RL; ASE learns large-scale reusable embeddings for simulated characters~\citep{peng2022ase}.
-These methods train new high-level policies over the skill space.
-VGSR requires no downstream training: the archive is used directly at test time, and the ``prior'' takes the form of a gated command residual.
-
-\textbf{Quality-diversity repertoires.}
-MAP-Elites~\citep{mouret2015illuminating} and behavior repertoires enable rapid damage adaptation by searching a pre-built archive at deployment~\citep{cully2015robots,pugh2016quality}.
-VGSR borrows the descriptor-archive idea but differs in how the archive acts: rather than switching between archived controllers, archived chunks modulate the command input of a single pretrained policy.
+\textbf{Options, skills, and behavior archives.}
+Temporal-abstraction research builds libraries of reusable behaviors: options~\citep{sutton1999options,bacon2017option}, unsupervised skills~\citep{eysenbach2019diversity,sharma2020dynamics}, skill priors from offline data~\citep{pertsch2020spirl,ajay2021opal}, large-scale skill embeddings~\citep{peng2022ase}, and quality-diversity repertoires used for rapid adaptation~\citep{mouret2015illuminating,cully2015robots,pugh2016quality}.
+Our retrieval-based variant (Section~\ref{sec:retrieval}) is squarely in this tradition: an online archive of behavior chunks with body-frame outcome descriptors, reused as gated command residuals.
+Our experiments position it as a partial solution: it inherits the archive's coverage limits, whereas the response model interpolates over the whole command box.
+Hierarchical RL layers goal-conditioned controllers~\citep{nachum2018data}; recent imitation methods execute action chunks closed-loop~\citep{zhao2023learning}.
+We show raw chunk replay destabilizes contact-rich locomotion, motivating compensation at the command interface instead.
 
 \textbf{Residual control.}
 Residual policy learning adds a learned corrective action on top of a base controller~\citep{silver2018residual,johannink2019residual}.
-VGSR is residual in command space rather than action space, and the residual is not learned by gradient descent---it is \emph{retrieved} from an archive and gated by viability checks.
+VGFC is residual in \emph{command} space rather than action space, and its correction is not trained by gradient descent against task reward; it is computed by inverting an identified response model, which requires no additional environment interaction beyond the identification data.
 
-\textbf{Command-conditioned legged locomotion.}
-Massively parallel training yields robust velocity-tracking policies~\citep{rudin2022learning,makoviychuk2021isaac,mittal2023orbit,schwarke2025rslrl}, which transfer to harsh real terrain~\citep{lee2020learning,miki2022learning} and adapt online~\citep{kumar2021rma}; multiplicity-of-behavior training exposes gait diversity through command interfaces~\citep{margolis2022walk}.
-We treat such a policy as a fixed, strong low-level layer and study whether an archive distilled from its own converged behavior can improve it at test time.
-Recent imitation approaches also exploit action chunking~\citep{zhao2023learning}, but execute chunks closed-loop with dense sensing; our negative results (Section~\ref{sec:negative}) reinforce that raw chunk replay is unreliable for rough-terrain locomotion.
-
-The individual ingredients---archives, residuals, gating---are each established.
-The contribution here is the specific combination for contact-rich locomotion, evaluated directly against the strong pretrained controller it augments.
+\textbf{Command-conditioned control policies.}
+Massively parallel training yields robust velocity-tracking policies~\citep{rudin2022learning,makoviychuk2021isaac,mittal2023orbit,schwarke2025rslrl} that transfer to harsh terrain~\citep{lee2020learning,miki2022learning}, adapt online~\citep{kumar2021rma}, and expose behavioral diversity through command interfaces~\citep{margolis2022walk}.
+These works improve the policy during training; VGFC is complementary and operates on the frozen result, exploiting exactly the command-conditioning these policies already expose.
 
 \section{Method}
 \label{sec:method}
 
-VGSR has three stages: (i) building an online archive from a converged policy, (ii) selecting archive chunks at test time and converting them to command residuals, and (iii) gating residual activation by viability.
-Throughout, $\pi_\theta$ denotes a pretrained velocity-conditioned low-level policy that maps observations and a 3-D command $c = (v_x, v_y, \omega_z)$ (body-frame forward velocity, lateral velocity, yaw rate) to joint actions.
+\textbf{Design requirements.}
+Three requirements shape every design decision that follows.
+\emph{R1, no retraining}: the compensator must improve a policy whose weights, reward, and training pipeline are unavailable or too expensive to touch; it may only observe the policy acting.
+\emph{R2, do no harm}: the pretrained policy is strong, so the compensator must be able to fall back to it exactly, and every intervention must be vetoed when its predicted benefit is uncertain.
+\emph{R3, embodiment generality}: nothing in the method may depend on robot-specific knowledge beyond what can be identified automatically from the policy's own rollouts.
+The resulting architecture has three parts, presented in the next three subsections: a compensation \emph{interface} (where to intervene, Section~\ref{sec:setting}), a response \emph{model} (what to know, Section~\ref{sec:model}), and a gated \emph{inversion} rule (how to act, Section~\ref{sec:vgfc}).
 
-\subsection{RL-Converged Online Skill Archive}
-\label{sec:archive}
+\subsection{Compensation Interface}
+\label{sec:setting}
 
-\textbf{Data collection.}
-We roll out the converged policy $\pi_\theta$ under its training command distribution and record observations, actions, rewards, base poses, base velocities, joint velocities, and termination flags.
-Trajectories are segmented into fixed-horizon chunks $\tau_i$ with a fixed stride.
+Let $\pi_\theta$ be a frozen, pretrained continuous-control policy mapping observations $o_t$ and a command $c$ to low-level actions.
+In our locomotion instantiation $c = (v_x, v_y, \omega_z)$ is the body-frame velocity command, but the framework only requires \emph{some} command interface through which behavior can be steered, a property shared by most modern learned continuous-control policies~\citep{margolis2022walk,kumar2021rma}.
 
-\textbf{Body-frame locomotion descriptors.}
-Each chunk is compressed into a descriptor $d_i$ expressed in the body frame of its initial state:
-horizontal displacement ($\Delta x, \Delta y$), yaw change ($\Delta \psi$), average forward/lateral velocity and yaw rate, mean body height and height standard deviation, mean action norm and joint-velocity norm, an energy proxy
+Why intervene at the command rather than at the action, as residual policy learning does~\citep{silver2018residual,johannink2019residual}?
+Three reasons, mirroring the three requirements.
+First, action-space corrections must be \emph{learned}, and learning them requires reward access and environment interaction, violating R1; a command-space correction can instead be \emph{computed} from an identified model.
+Second, an action-space residual shares authority with the policy at the contact-critical timescale, where a wrong correction destabilizes; a command-space correction leaves $\pi_\theta$ in full control of posture, contacts, and joints, so the worst case of a poor command is inefficiency, not a fall (R2).
+Third, the command box is the one interface that command-conditioned policies share across embodiments (R3): the same three numbers steer a quadruped and a humanoid.
+
+A task supplies a target $g$; the \emph{direct} controller computes a proportional body-frame command
 \begin{equation}
-e_i \;=\; \operatorname{mean}\bigl(\lvert a_t \odot \dot{q}_t \rvert\bigr),
-\label{eq:energy}
+c_{\text{goal}} \;=\; \bigl(\operatorname{clip}(k_v \, x_{\text{local}}), \; \operatorname{clip}(k_v \, y_{\text{local}}), \; \operatorname{clip}(k_\psi \operatorname{atan2}(y_{\text{local}}, x_{\text{local}}))\bigr),
+\label{eq:cgoal}
 \end{equation}
-a stability score combining posture, height, and termination statistics, and an action-difference smoothness score.
-Body-frame descriptors make ``walk forward,'' ``strafe,'' and ``turn'' invariant to world heading, so the same behavior clusters together across rollouts.
-Each chunk also stores an initial-state feature $f_i$ and a scalar utility $u_i$ aggregating reward, displacement, stability, smoothness, and energy.
+which is the uncompensated baseline: a strong pretrained policy driven straight at the goal.
+Proportional commands of this kind are the standard way tasks are layered on velocity-conditioned policies, and they carry a systematic inefficiency: far from the goal they saturate, commanding full speed regardless of whether the terrain rewards it, and near the goal they shrink, producing energy-hungry in-place stepping.
+Compensation replaces $c_{\text{goal}}$ with a corrected command at each high-level step (every $E = 4$ low-level steps).
+The design question is where the correction comes from and when it is trusted.
 
-\textbf{Online archive update.}
-The archive retains at most $M$ chunks.
-Unstable chunks that are not descriptor-novel are filtered; the remainder are ranked by utility and the top-$M$ retained.
-Chunks are clustered by weighted $k$-means in descriptor space, with weights emphasizing motion outcomes ($\Delta x$, $\Delta y$, $\Delta \psi$, average velocities, yaw rate, stability, smoothness) and down-weighting energy and action norms so that near-identical motions are not split by energy noise.
-Central and high-utility representatives are kept per cluster.
-The result is a quality-diversity-style behavioral memory~\citep{cully2015robots} whose entries are, by construction, behaviors the converged policy can actually execute stably.
-Algorithm~\ref{alg:archive} summarizes the procedure.
+\subsection{Command-Response Model}
+\label{sec:model}
 
-\begin{algorithm}[t]
-\caption{Build Online Action Archive from a Converged RL Policy}
-\label{alg:archive}
-\begin{algorithmic}[1]
-\Require converged policy $\pi_\theta$, environment $E$, horizon $H$, archive size $M$, clusters $K$
-\State Collect rollouts of $\pi_\theta$ in $E$; record observations, actions, rewards, poses, velocities, terminations
-\State Segment trajectories into fixed-horizon chunks $\{\tau_i\}$ with stride
-\For{each chunk $\tau_i$}
-  \State $d_i \gets$ body-frame locomotion descriptor of $\tau_i$; \quad $f_i \gets$ initial-state feature
-  \State $u_i \gets$ utility(reward, displacement, stability, smoothness, energy)
-\EndFor
-\State Filter unstable, non-novel chunks; keep top-$M$ by utility
-\State Cluster descriptors with weighted $k$-means ($K$ clusters, outcome-weighted dimensions)
-\State Keep central and high-utility representatives per cluster
-\Ensure archive $\mathcal{A} = \{(\tau_i, d_i, f_i, u_i, \text{skill}_i)\}$
-\end{algorithmic}
-\end{algorithm}
+To correct a command before executing it, the compensator must predict what any candidate command would do.
+The object to model is not the robot's action-level dynamics, as in model-based RL~\citep{nagabandi2018neural}: the policy already handles those competently, and re-modeling them would duplicate its work at far higher dimensionality.
+What needs modeling is the \emph{closed loop} of policy and robot, viewed from the command interface: given the current situation, what motion, at what energetic price, and at what postural risk does each command buy?
+This reframing keeps the model input three-dimensional at the interface and makes identification a supervised problem on the policy's own rollouts, satisfying R1 and R3 simultaneously.
 
-\subsection{Archive Chunk Selection}
-\label{sec:selection}
+\textbf{Excitation data.}
+We run the converged policy in $64$ parallel environments and override its command with excitation commands sampled uniformly from the command box (scaled down with probability $0.3$ to cover the near-goal regime), resampled every $25$ steps. This is system identification with persistent excitation, applied to the policy-robot closed loop.
+Crucially, \emph{no quality filtering is applied}: stumbles, slips, and low-posture episodes are kept, because the model must know where the policy performs poorly.
+This is the same self-distillation data source that populates our behavior archive (Section~\ref{sec:retrieval}); the difference is what is extracted from it.
 
-At test time the robot must reach a target position $g$.
-At each high-level step, the controller computes the body-frame target $g_{\text{body}}$ and scores every archive chunk $k$ by
+\textbf{Response targets.}
+From constant-command windows of $H{=}16$ low-level steps we regress six outcomes: body-frame displacement $(\Delta x, \Delta y)$, yaw change $\Delta\psi$, per-step energy $\bar{e} = \operatorname{mean}(\lvert a_t \odot \dot{q}_t \rvert)$, and the minimum and mean of \emph{terrain-relative posture height} over the window.
+The horizon is four replanning intervals ($E{=}4$ low-level steps per high-level decision, $80$\,ms at the $50$\,Hz control rate): long enough to span a stride and expose gait-level energy and posture differences between commands, short enough that a single-step prediction from the current observation remains accurate.
+Posture height is recovered from the policy's own height-scan observation (mean scan return plus sensor offset), not from world coordinates.
+This choice matters: on procedurally rough terrain, world-frame base height confounds posture with ground elevation, and a model trained on world-frame labels reaches only $R^2 = 0.25$ on minimum height; the terrain-relative labels raise this to $R^2 = 0.88$ (Table~\ref{tab:model}).
+An unreliable height channel silently disables predictive gating; this label correction is what makes the viability gate work.
+
+\textbf{Model.}
+The response model is a mapping
 \begin{equation}
-\begin{aligned}
-J_k \;=\;& \hat{D}_k
-\;+\; \lambda_{\text{state}} \, \lVert f_{\text{now}} - f_k \rVert
-\;+\; \lambda_{\text{energy}} \, e_k
-\;+\; \lambda_{\text{stab}} \, (1 - s_k) \\
-&\;+\; \lambda_{\text{np}} \, \max(0, -\hat{P}_k)
-\;-\; \lambda_{\text{util}} \, z(u_k)
-\;-\; \lambda_{\text{prog}} \, \max(0, \hat{P}_k),
-\end{aligned}
-\label{eq:cost}
+f_\phi : (o_t, c) \;\longmapsto\; \bigl(\widehat{\Delta x}, \widehat{\Delta y}, \widehat{\Delta\psi}, \hat{e}, \hat{h}_{\min}, \hat{h}_{\text{mean}}\bigr),
+\label{eq:responsemodel}
 \end{equation}
-where $\hat{D}_k$ is the predicted distance to the target after executing chunk $k$ (obtained by applying the chunk's body-frame displacement descriptor to the current pose), $\hat{P}_k$ is the predicted progress (current distance minus $\hat{D}_k$), $f_k$ is the chunk's initial-state feature, $e_k$ its energy proxy, $s_k$ its stability score, and $z(u_k)$ the archive-normalized utility.
-The state-distance term implements \emph{applicability}: chunks recorded in dissimilar states are penalized, addressing the initial-state-mismatch failure mode directly in the selection objective.
-Descriptor-based prediction plays the role of a one-step motion model without learning full dynamics.
+implemented as a two-layer MLP (256 units, dropout $0.1$) that takes the full policy observation with the command slice replaced by the candidate $c$; inputs and outputs are standardized, and training minimizes MSE with an episode-grouped train/test split so windows from one episode never straddle the split.
+Conditioning on the full observation is what makes the predictions \emph{situational}: the same candidate command is predicted to cost different energy on different terrain and from different gait states, which is precisely the information a fixed command-shaping heuristic cannot express.
+Identification is cheap: $\sim$25k windows from roughly four minutes of parallel simulation, and minutes of training.
 
-\subsection{Command-Space Residual Control}
-\label{sec:residual}
+\subsection{Viability-Gated Inversion}
+\label{sec:vgfc}
 
-The selected chunk $k^\ast = \arg\min_k J_k$ is \emph{not} replayed.
-Instead, its velocity descriptor is read out as a candidate command
+Given the response model, the naive compensator would pick the command whose predicted outcome looks best.
+The pitfalls are instructive, and each safeguard below exists because we hit one of them (quantified in Section~\ref{sec:ablation-vgfc}).
+Minimizing predicted distance-to-goal turns the compensator into a speed maximizer, since aggressive commands always look best over a short horizon; so \emph{progress is a constraint, not the objective}.
+Minimizing energy without posture safeguards finds the policy's true energetic optimum, a low crawl that fails the task; so \emph{viability gates the objective}.
+And executing the optimizer's choice verbatim concentrates all model error into the executed command; so \emph{the correction is bounded}.
+
+At each high-level step VGFC forms a candidate set $\mathcal{C}$ around the direct command: the direct command itself, scaled versions, yaw-rate perturbations, and a polar grid over approach speeds and angles with three yaw-rate levels ($\sim$70 candidates after deduplication).
+A single batched forward pass predicts each candidate's response $(\widehat{\Delta x}, \widehat{\Delta y}, \widehat{\Delta\psi}, \hat{e}, \hat{h}_{\min}, \hat{h}_{\text{mean}})$, from which predicted progress is
 \begin{equation}
-c_{\text{skill}} \;=\; \bigl(\bar{v}_x^{(k^\ast)}, \; \bar{v}_y^{(k^\ast)}, \; \bar{\omega}_z^{(k^\ast)}\bigr),
+\hat{P}(c) \;=\; \lVert g_{\text{body}} \rVert \;-\; \bigl\lVert g_{\text{body}} - (\widehat{\Delta x}(c), \widehat{\Delta y}(c)) \bigr\rVert .
 \end{equation}
-while the direct goal command is computed from the body-frame target as
+Selection then proceeds in one of three modes (Algorithm~\ref{alg:vgfc}):
+
+\emph{(a) Follow (energy compensation).}
+If the direct command is predicted posture-safe, VGFC selects
 \begin{equation}
-c_{\text{goal}} \;=\; \bigl(\operatorname{clip}(k_v \, x_{\text{local}}), \; \operatorname{clip}(k_v \, y_{\text{local}}), \; \operatorname{clip}(k_\psi \operatorname{atan2}(y_{\text{local}}, x_{\text{local}}))\bigr).
-\end{equation}
-The executed command blends the two:
-\begin{equation}
-c \;=\; (1-\alpha)\, c_{\text{goal}} \;+\; \alpha\, c_{\text{skill}},
+c^\ast \;=\; \arg\min_{c \,\in\, \mathcal{C}_{\text{elig}}} \; \hat{e}(c),
 \qquad
-\alpha \;=\;
-\begin{cases}
-\alpha_{\max} \operatorname{clip}\!\bigl(\nicefrac{\lVert g_{\text{body}} \rVert}{d_{\text{blend}}},\, 0,\, 1\bigr) & \text{if viable},\\[2pt]
-0 & \text{otherwise},
-\end{cases}
-\label{eq:blend}
+\mathcal{C}_{\text{elig}} = \Bigl\{ c : \hat{P}(c) \ge \beta\, \hat{P}(c_{\text{goal}}), \;\;
+\hat{h}_{\min}(c) \ge h_{\text{floor}}, \;\;
+\hat{h}_{\text{mean}}(c) \ge h_{\text{now}} - \delta \Bigr\},
+\label{eq:follow}
 \end{equation}
-and $\pi_\theta$ executes with command $c$ for a short horizon before the next high-level step.
-The distance-proportional blend automatically anneals the residual near the goal.
-Because $\pi_\theta$ retains full control of posture, contacts, and joints, the archive can only bias \emph{where the policy is told to go}, never \emph{how it moves its joints}---this is the central design decision that separates VGSR from open-loop skill replay.
+with progress floor $\beta = 0.9$, posture floor $h_{\text{floor}}$ a fixed fraction of nominal posture height, and height-decline tolerance $\delta = 2$\,cm.
+The compensation activates only if the predicted saving clears a margin, $\hat{e}(c^\ast) < \hat{e}(c_{\text{goal}}) - \epsilon_e$; otherwise the direct command runs unmodified.
+The semantics are exactly feedforward compensation: \emph{keep the reference trajectory, remove the systematic energetic inefficiency}.
 
-\subsection{Viability Gating}
-\label{sec:gate}
+\emph{(b) Rescue (predictive viability).}
+If the \emph{direct command itself} is predicted to drive minimum posture height below a rescue threshold (set below the eligibility floor, so ordinary roughness does not trigger it), meaning the model foresees height collapse, VGFC instead selects the candidate maximizing predicted minimum posture height among those with non-negative predicted progress.
+This is the gate acting before failure exists: reactive height gates triggered by \emph{measured} height, which we tested in the retrieval variant, either block progress or fire after posture is already lost.
 
-\textbf{Heuristic gate.}
-The residual is activated ($\alpha > 0$ in Eq.~\ref{eq:blend}) only if the candidate passes all of:
-(i)~\emph{alignment}: the skill command direction agrees with the goal direction, $\text{align}(c_{\text{skill}}, g_{\text{body}}) \ge \epsilon_a$;
-(ii)~\emph{progress}: predicted progress $\hat{P}_{k^\ast} \ge \epsilon_p$;
-(iii)~\emph{stability}: chunk stability $s_{k^\ast} \ge \epsilon_s$;
-(iv)~\emph{energy}: the chunk's energy z-score within the archive does not exceed $\epsilon_e$;
-(v)~\emph{speed cap}: $\lVert c_{\text{skill}} \rVert \le (1+\rho)\lVert c_{\text{goal}} \rVert$.
-A recovery clause keeps the controller active near the goal when body height is below a threshold fraction of nominal, prioritizing height recovery over premature stopping.
-On failure of any check, the controller falls back to the pure direct command---the pretrained policy is the safe default.
+\emph{(c) Restore (measured posture).}
+If measured posture height has already sagged below an operating band, compensation is suspended and the direct command runs until posture recovers; the aggressive proportional command restores height reliably.
+This closes the loop against slow posture drift that a 16-step model horizon cannot see.
 
-\textbf{Learned viability discriminator.}
-To reduce threshold hand-tuning, we log every candidate decision during guarded evaluation and train a lightweight classifier $p_\phi$ mapping decision features to episode-level success.
-Features include current/predicted distance, predicted progress, state distance and its RBF applicability, utility, energy, stability, alignment, energy z-score, and the norms of both commands.
-To avoid merely cloning the heuristic, the deployable variant \emph{excludes} the heuristic gate's own outputs (its blend weight, accept flag, and low-height flag).
-Train/test splitting is by \emph{episode group}, so decisions from one episode never appear on both sides.
-At deployment the learned gate can \emph{replace} the heuristic, be \emph{union}-ed with it, or \emph{intersect} it; intersection---the learned model further filtering candidates that already pass the physical guard---is the most stable and is what we report.
-Algorithm~\ref{alg:control} summarizes the test-time loop.
+\textbf{Bounded, annealed correction.}
+In all modes the selected candidate is applied as a \emph{bounded feedforward correction} rather than a substitute, and the correction gain decays as the goal approaches:
+\begin{equation}
+c \;=\; c_{\text{goal}} + \alpha_t \,\bigl(c^\ast - c_{\text{goal}}\bigr),
+\qquad
+\alpha_t \;=\; \alpha_0 \operatorname{clip}\!\bigl(\nicefrac{\lVert g_{\text{body}} \rVert}{d_{\text{anneal}}},\, 0,\, 1\bigr),
+\qquad \alpha_0 = 0.5 .
+\label{eq:blendff}
+\end{equation}
+Bounding ($\alpha_0 < 1$) means the compensator biases the reference toward the model's preferred command but never fully owns it; this is the classical feedforward posture (correct the reference, keep the controller), and Section~\ref{sec:ablation-vgfc} shows it is what makes the method robust to model error: full substitution matches the bounded correction on the tuning seed and loses 5--6 success points off it.
+Annealing ($d_{\text{anneal}} = 0.5$\,m) returns full authority to the base policy for the terminal approach, because the success criterion is evaluated at the terminal state, which lies beyond the model's prediction horizon for most of the episode.
+The three modes are checked in the order restore, rescue, follow, so measured evidence overrides predicted evidence.
+The compensator itself is essentially free at run time: one batched forward pass over all candidates costs $0.14$\,ms on CPU ($0.08$\,ms on GPU) against the $80$\,ms high-level control interval.
+
+Altogether VGFC exposes seven scalars: the progress floor $\beta = 0.9$, the eligibility and rescue posture floors ($0.85$ and $0.80$ of nominal height), the restore band ($0.90$), the relative energy margin ($10\%$), and the correction gain and annealing distance of Eq.~\ref{eq:blendff}.
+All were tuned once, on a single seed of one robot, and frozen for every robot and task family we evaluate (Section~\ref{sec:setup}).
 
 \begin{algorithm}[t]
-\caption{Viability-Gated Skill Residual Control}
-\label{alg:control}
+\caption{Viability-Gated Feedforward Compensation (one high-level step)}
+\label{alg:vgfc}
 \begin{algorithmic}[1]
-\Require pretrained policy $\pi_\theta$, archive $\mathcal{A}$, target $g$, optional learned gate $p_\phi$
-\While{episode not done}
-  \State Observe state; compute body-frame target $g_{\text{body}}$ and direct command $c_{\text{goal}}$
-  \For{each chunk $k \in \mathcal{A}$}
-    \State Predict displacement from $d_k$; compute $\hat{D}_k$, $\hat{P}_k$, state applicability, and cost $J_k$ (Eq.~\ref{eq:cost})
-  \EndFor
-  \State $k^\ast \gets \arg\min_k J_k$; \quad $c_{\text{skill}} \gets$ velocity descriptor of $k^\ast$
-  \State $h \gets$ heuristic gate($k^\ast$): alignment $\wedge$ progress $\wedge$ stability $\wedge$ energy $\wedge$ speed cap
-  \If{learned gate enabled}
-    \State $h \gets h \wedge \bigl[p_\phi(\text{decision features}) \ge \eta\bigr]$ \Comment{intersect mode}
-  \EndIf
-  \State $\alpha \gets h \;?\; \alpha_{\max}\operatorname{clip}(\lVert g_{\text{body}}\rVert / d_{\text{blend}}, 0, 1) \;:\; 0$
-  \State Execute $\pi_\theta$ with $c = (1-\alpha)c_{\text{goal}} + \alpha c_{\text{skill}}$ for a short horizon
-\EndWhile
+\Require frozen policy $\pi_\theta$, response model $f_\phi$, target $g$, scalars $(\beta, h_{\text{floor}}, \delta, \epsilon_e, \alpha_0, d_{\text{anneal}})$
+\State Compute body-frame target $g_{\text{body}}$ and direct command $c_{\text{goal}}$ (Eq.~\ref{eq:cgoal})
+\State Build candidate set $\mathcal{C}$; predict responses $f_\phi(o, c)$ for all $c \in \mathcal{C}$ in one batch
+\If{measured posture $h_{\text{now}} <$ operating band}  \Comment{restore}
+  \State $c^\ast \gets c_{\text{goal}}$
+\ElsIf{$\hat{h}_{\min}(c_{\text{goal}}) < h_{\text{floor}}$}  \Comment{rescue: predicted collapse}
+  \State $c^\ast \gets \arg\max_{c\,:\,\hat{P}(c) \ge 0} \hat{h}_{\min}(c)$
+\Else  \Comment{follow: energy compensation}
+  \State $c^\ast \gets \arg\min_{c \in \mathcal{C}_{\text{elig}}} \hat{e}(c)$ per Eq.~\ref{eq:follow}
+  \If{$\hat{e}(c^\ast) \ge \hat{e}(c_{\text{goal}}) - \epsilon_e$} $c^\ast \gets c_{\text{goal}}$ \EndIf
+\EndIf
+\State Execute $\pi_\theta$ with $c = c_{\text{goal}} + \alpha_t (c^\ast - c_{\text{goal}})$ for $E$ low-level steps \Comment{bounded, annealed; Eq.~\ref{eq:blendff}}
 \end{algorithmic}
 \end{algorithm}
 
-\section{Experimental Setup}
+\subsection{Retrieval Variant (VGSR)}
+\label{sec:retrieval}
+
+Before arriving at model inversion, we developed \emph{Viability-Gated Skill Residuals} (VGSR), which we report in full as the natural skill-archive alternative.
+The same converged-policy rollouts are segmented into chunks, described by body-frame outcome descriptors (displacement, velocities, yaw rate, height statistics, energy, stability, smoothness), filtered by utility and descriptor novelty, and clustered into an online quality-diversity-style archive~\citep{cully2015robots}.
+At deployment, a chunk is selected by a descriptor-level cost combining predicted progress, initial-state applicability, energy, stability, and utility; its velocity descriptor is converted into a command that is \emph{blended} with the direct command, $c = (1-\alpha) c_{\text{goal}} + \alpha\, c_{\text{skill}}$, with $\alpha > 0$ only when a heuristic viability gate (goal alignment, predicted progress, chunk stability, energy z-score, speed cap) accepts the candidate; a learned decision-level gate can further filter it.
+VGSR is the non-parametric cousin of VGFC: retrieval interpolates only where the archive has coverage, while the response model interpolates over the entire command box; and VGSR's gate checks properties \emph{of an archived chunk}, while VGFC's gate checks \emph{predicted consequences of the actual candidate command in the current state}.
+Section~\ref{sec:results-retrieval} quantifies the difference.
+
+\section{Experiments}
+\label{sec:results}
+
+Our experiments answer four questions.
+\emph{Q1}: does compensation improve a strong pretrained policy, and on which metrics (Sections~\ref{sec:results-harder},~\ref{sec:results-coverage})?
+\emph{Q2}: does the recipe transfer across embodiments without re-tuning (Section~\ref{sec:results-coverage})?
+\emph{Q3}: which components carry the effect (Section~\ref{sec:ablation-vgfc})?
+\emph{Q4}: how does model inversion compare with the retrieval-based use of the same experience (Section~\ref{sec:results-retrieval})?
+
+\subsection{Setup}
 \label{sec:setup}
 
 \textbf{Environments and robots.}
-All experiments use Isaac Lab~\citep{mittal2023orbit} rough-terrain velocity environments: \texttt{Isaac-Velocity-Rough-Unitree-Go2-v0} (quadruped) and \texttt{Isaac-Velocity-Rough-H1-v0} (humanoid).
-The low-level controller is the publicly distributed pretrained RSL-RL checkpoint for each task~\citep{rudin2022learning,schwarke2025rslrl}; the same checkpoint generates the archive rollouts.
-The task is target reaching: the robot must move its base to a target position $g$ specified relative to its start pose.
+All experiments use Isaac Lab~\citep{mittal2023orbit} rough-terrain velocity environments with three embodiments: \texttt{Isaac-Velocity-Rough-Unitree-Go2-v0} and \texttt{Isaac-Velocity-Rough-Anymal-D-v0} (quadrupeds) and \texttt{Isaac-Velocity-Rough-H1-v0} (humanoid), with the publicly distributed pretrained RSL-RL checkpoints~\citep{rudin2022learning,schwarke2025rslrl} as the compensated policies.
+The task is target reaching: move the base to a target $g$ specified relative to the start pose.
+Success requires no early termination, final XY distance below $0.3$\,m, and \emph{final height} above $70\%$ of spawn height.
+Final height is the world-frame height of the base at the episode's last step; it serves as a terminal posture check, so that an episode that reaches the target crouched, collapsed, or mid-fall does not count as a success.
+Because the terrain is procedurally rough, final height reflects both posture and the ground elevation at wherever the robot stops, which is why we report it alongside, rather than inside, the energy and distance metrics.
+We also report final distance, the energy proxy $\operatorname{mean}(\lvert a \odot \dot{q}\rvert)$ (mean absolute mechanical power over the episode), and how often compensation was active.
 
-\textbf{Target sets.}
-\emph{Moderate} Go2 targets: $(0.75,0)$, $(0.75,0.75)$, $(1.5,0)$, $(0,0.75)$ m.
-\emph{Harder} Go2 targets: $(2,0)$, $(1.5,1)$, $(0,1.25)$, $(-0.75,0)$, $(1,-1)$ m, including backward and lateral goals that the velocity-tracking training distribution covers less densely.
-\emph{Holdout} directions for learned-gate evaluation (never used for tuning): $(1.25,0.5)$, $(0.5,1)$, $(-0.5,0.5)$, $(1.25,-0.5)$ m.
-H1 targets: $(0.5,0)$, $(0.5,0.5)$, $(1,0)$ m.
+\textbf{Task families.}
+\emph{Harder} Go2 targets: $(2,0)$, $(1.5,1)$, $(0,1.25)$, $(-0.75,0)$, $(1,-1)$, $(0,-1.25)$, $(-1,0.75)$, $(1.75,-0.75)$\,m: long, diagonal, lateral, and backward goals covering the command box (the last three directions were added when the benchmark was expanded and were never used in any tuning).
+\emph{Moderate} Go2 targets: $(0.75,0)$, $(0.75,0.75)$, $(1.5,0)$, $(0,0.75)$\,m.
+\emph{Holdout} Go2 directions (never used during any tuning): $(1.25,0.5)$, $(0.5,1)$, $(-0.5,0.5)$, $(1.25,-0.5)$\,m.
+H1 targets: $(0.5,0)$, $(0.5,0.5)$, $(1,0)$\,m.
+ANYmal-D uses the same eight harder targets as Go2, with the entire recipe (excitation collection, identification, and every gate parameter) applied unchanged: no per-robot tuning of any kind.
 
 \textbf{Methods.}
-(1)~\texttt{direct}: the pretrained controller driven by the direct target command only---a strong baseline, not a strawman;
-(2)~\texttt{skill}: unguarded residual, i.e.\ Eq.~\ref{eq:blend} with the gate forced open;
-(3)~\texttt{VGSR}: heuristic-gated residual (with recovery clause on harder targets);
-(4)~\texttt{learned-VGSR}: heuristic gate intersected with the learned discriminator at threshold $\eta = 0.999$.
-We deliberately exclude random/zero-action baselines from the main comparison; they are sanity checks only, and beating them would say nothing given the strength of the pretrained controller.
+(1)~\texttt{direct}: the pretrained policy under the direct target command (the policy being compensated, and a strong baseline);
+(2)~\texttt{VGSR}: the retrieval-based variant with heuristic gate (and recovery clause on harder targets);
+(3)~\texttt{VGFC}: model-feedforward compensation (Section~\ref{sec:vgfc}).
+Random/zero-command baselines are excluded as uninformative against a strong pretrained policy.
 
-\textbf{Metrics.}
-Success rate (no early termination, final height above threshold, final XY distance below threshold); average final distance (m); average energy proxy (Eq.~\ref{eq:energy}); average final height (m); early-termination rate; and the number of high-level steps in which the residual was active.
-Note the success criterion includes a \emph{final-height} requirement: an episode that reaches the target XY neighborhood in a crouched posture fails.
-For the strengthened harder-target aggregate we report episode-level bootstrap 95\% confidence intervals.
+\textbf{Protocol.}
+VGFC's seven scalars (Section~\ref{sec:vgfc}) were tuned on a \emph{single} seed (301) on the harder set only, then frozen.
+All reported results use disjoint evaluation seeds: harder $5$ seeds $\times$ $10$ trials $\times$ $8$ targets (400 episodes per method), moderate $3 \times 10$ (120), holdout $3 \times 5$ (60), ANYmal-D $3 \times 5 \times 8$ (120), H1 $3 \times 5$ (45).
+Per-robot response models (Go2, ANYmal-D, H1) are identified with the identical recipe.
+We report episode-level bootstrap 95\% CIs.
 
-\section{Results}
-\label{sec:results}
+\subsection{Response-Model Quality}
+\label{sec:results-model}
 
-\subsection{Go2 Rough Terrain: Moderate Targets}
-\label{sec:moderate}
+Table~\ref{tab:model} reports held-out-episode test metrics for the Go2 response model.
+Displacement and yaw responses are accurately predicted ($R^2 \ge 0.92$); energy is predicted well enough to rank candidates ($R^2 = 0.75$); and terrain-relative posture height is predicted reliably ($R^2 = 0.88$/$0.91$ for min/mean, MAE under $9$\,mm), versus $R^2 = 0.25$ when the same model is trained on world-frame height labels, which terrain elevation corrupts.
+The excitation data also matters: an earlier model trained on utility-filtered archive segments (the natural ``reuse the archive'' shortcut) reached $R^2 = -1.9$ on lateral displacement, because curated high-quality segments underrepresent exactly the sloppy behavior the model must know about.
 
-Table~\ref{tab:moderate} reports 10 trials per target (40 episodes per method).
-VGSR attains a slightly higher success rate ($1.000$ vs.\ $0.975$) at equal final distance, with a small energy overhead.
-The takeaway is modest by design: on targets the pretrained controller already handles well, the gated residual does no harm---the gate correctly stays out of the way.
+\textbf{Identification data efficiency.}
+Re-identifying the model from episode-group subsamples of the excitation data degrades gracefully: with $50\%$ of the data, displacement $R^2$ holds at $0.93$ and energy drops to $0.72$; with $25\%$ ($\approx$ one minute of parallel simulation), displacement is still $0.92$ and energy $0.62$.
+Displacement, which drives the progress constraint, saturates early; energy, the objective being optimized, is what additional data buys.
+Section~\ref{sec:ablation-vgfc} evaluates the $25\%$ model in closed loop.
 
 \begin{table}[t]
 \centering
-\caption{Go2 rough terrain, moderate targets (10 trials $\times$ 4 targets). Arrows give the preferred direction.}
-\label{tab:moderate}
-\begin{tabular}{lccccc}
+\caption{Go2 command-response model, held-out-episode test metrics ($\sim$25k excitation windows, 16-step horizon). Terrain-relative height labels are essential for the viability gate.}
+\label{tab:model}
+\begin{tabular}{lccc}
 \toprule
-Method & Success $\uparrow$ & Final dist.\ (m) $\downarrow$ & Energy $\downarrow$ & Final height (m) & Term.\ $\downarrow$ \\
+Output & MAE & RMSE & $R^2$ \\
 \midrule
-VGSR (ours) & \textbf{1.000} & 0.2892 & 1.8924 & 0.3588 & 0.000 \\
-direct      & 0.975 & 0.2893 & \textbf{1.8147} & 0.3604 & 0.000 \\
+$\Delta x$ (m)            & 0.019 & 0.025 & 0.944 \\
+$\Delta y$ (m)            & 0.019 & 0.025 & 0.942 \\
+$\Delta \psi$ (rad)       & 0.029 & 0.042 & 0.927 \\
+energy (per step)         & 0.435 & 0.625 & 0.752 \\
+min.\ rel.\ height (m)    & 0.009 & 0.012 & 0.875 \\
+mean rel.\ height (m)     & 0.008 & 0.010 & 0.906 \\
+\midrule
+min.\ height, world-frame labels & 0.039 & 0.092 & 0.247 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\subsection{Go2 Rough Terrain: Harder Targets (Main Result)}
-\label{sec:harder}
+\subsection{Go2 Harder Targets: Main Result}
+\label{sec:results-harder}
 
-The initial 5-trial evaluation (25 episodes per method) that motivated the gate design showed VGSR improving success ($0.800$ vs.\ $0.760$), final distance ($0.2822$ vs.\ $0.2884$), and energy ($2.09$ vs.\ $2.39$).
-Because 25 episodes is too few for a headline claim, we strengthened the evaluation to 20 trials per target (100 episodes per method) by aggregating three seeds.
-Table~\ref{tab:harder} reports means with episode-level bootstrap 95\% CIs.
+The harder-target benchmark comprises eight targets (five original plus three added directions, Section~\ref{sec:setup}) evaluated over 5 seeds $\times$ 10 trials, i.e.\ 400 episodes per method.
 
-\begin{table}[t]
-\centering
-\caption{Go2 rough terrain, harder targets, strengthened aggregate (20 trials $\times$ 5 targets $=$ 100 episodes per method; 3 seeds). Brackets are episode-level bootstrap 95\% CIs.}
-\label{tab:harder}
-\begin{tabular}{lcccc}
-\toprule
-Method & Success $\uparrow$ & Final dist.\ (m) $\downarrow$ & Energy $\downarrow$ & Final height (m) \\
-\midrule
-VGSR (ours) & \textbf{0.790} {\scriptsize$[0.710, 0.870]$} & 0.2979 {\scriptsize$[0.2749, 0.3370]$} & \textbf{1.9913} {\scriptsize$[1.8819, 2.0936]$} & 0.3071 {\scriptsize$[0.2885, 0.3237]$} \\
-direct      & 0.780 {\scriptsize$[0.700, 0.860]$} & \textbf{0.2888} {\scriptsize$[0.2874, 0.2902]$} & 2.1954 {\scriptsize$[2.0831, 2.3110]$} & 0.3174 {\scriptsize$[0.3027, 0.3313]$} \\
-\bottomrule
-\end{tabular}
-\end{table}
+\textbf{Aggregate.}
+VGFC reduces energy by $10.5\%$ ($1.976$ vs.\ $2.208$; CIs $[1.938, 2.016]$ vs.\ $[2.156, 2.256]$, non-overlapping) while success is statistically matched ($0.797$, CI $[0.760, 0.835]$, vs.\ $0.805$, CI $[0.765, 0.843]$), with matched final distance and height and zero early terminations for either method.
+The energy effect is consistent \emph{within} seeds: the paired per-seed difference is negative on all five benchmark seeds ($-6.4\%$ to $-14.3\%$), and on all 14 evaluation seeds across the Go2 families and ANYmal-D (sign test $p < 10^{-4}$), while the paired success difference is centered on zero ($-0.05$ to $+0.04$).
+Figure~\ref{fig:paired} visualizes both distributions; we summarize the aggregate in text because the honest headline is one number and one non-effect, not a grid of near-identical bars.
+The retrieval variant, evaluated on the original five-target protocol (250 episodes), reaches a similar per-family energy level ($2.061$ vs.\ VGFC's $2.073$ under that protocol) but with a $1.2\%$ termination rate and lower final height, and, as Section~\ref{sec:results-retrieval} shows, its savings do not persist across the other task families.
 
 \begin{figure}[t]
 \centering
-\includegraphics[width=\linewidth]{go2_harder_strengthened_20trial_metrics.png}
-\caption{Go2 harder targets, strengthened 20-trial aggregate (100 episodes per method). VGSR reduces the energy proxy with overlapping-but-shifted CIs while success is marginally higher; final distance and final height are slightly worse, driven by the height-limited 2\,m forward target (Section~\ref{sec:negative}).}
-\label{fig:harder}
+\includegraphics[width=0.85\linewidth]{ff_v4_paired_differences.png}
+\caption{Paired per-seed differences (VGFC $-$ direct, evaluated inside the same runs) for every evaluation seed of every task family. Left: the relative energy difference is negative on all 14 Go2 and ANYmal-D seeds (sign test $p < 10^{-4}$); the H1 seeds (gray) scatter widely because compensation is nearly inactive there. Right: the success difference is centered on zero. The compensation buys energy without paying success.}
+\label{fig:paired}
 \end{figure}
 
-Three observations, stated at the strength the data supports.
-\emph{First}, the energy improvement is the most consistent effect: $1.99$ vs.\ $2.20$ ($-9.3\%$), with CIs that barely overlap.
-The archive supplies locally better-matched motion priors---for example, committed lateral or turning commands where the proportional direct command produces inefficient in-place correction.
-\emph{Second}, the success advantage is marginal ($0.790$ vs.\ $0.780$, heavily overlapping CIs): the initial 5-trial gap of $+0.04$ did not survive aggregation, and we report this honestly rather than leaning on the favorable seed.
-\emph{Third}, VGSR's final distance and height are slightly worse on average; both effects trace mostly to the 2\,m forward target where episodes approach the XY goal but fail the height criterion (Section~\ref{sec:negative}).
-Figure~\ref{fig:harder} visualizes the aggregate; Figure~\ref{fig:traj} shows representative trajectories.
-
 \begin{figure}[t]
 \centering
-\includegraphics[width=0.95\linewidth]{go2_guarded_skill_command_v1_recovery_harder_trajectories.png}
-\caption{Go2 harder-target trajectories (blue: VGSR; red: direct). Both controllers reach the target neighborhood (green circle) on most targets; qualitative differences are largest on the diagonal $(1.5,1)$ and lateral $(0,1.25)$ goals where the residual commits to smoother approach paths.}
+\includegraphics[width=\linewidth]{ff_v4_harder_trajectories.png}
+\caption{Control examples: XY paths on the eight harder targets (one evaluation seed, 10 trials per method; the green circle is the success radius). VGFC and the direct baseline reach the same target neighborhoods along closely matched paths; the compensation changes how the command is tracked, not where the robot goes.}
 \label{fig:traj}
 \end{figure}
 
-\subsection{Gate Ablation: Is the Gate Necessary?}
-\label{sec:ablation}
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{ff_v4_control_example.png}
+\caption{A single compensated episode on the hardest target $(2,0)$. (a)~Both controllers walk 2\,m over rough terrain. (b)~Base height over the episode: during the shaded steps the model predicts that the direct command would breach the posture floor, and the rescue mode substitutes height-preserving candidates; VGFC holds posture while the uncompensated policy sinks below the success threshold. (c)~The response model's per-step energy predictions for the direct command and the chosen candidate; the shaded gap is the predicted saving that the margin requires before compensating.}
+\label{fig:example}
+\end{figure}
 
-Table~\ref{tab:gate} isolates the gate's contribution on harder targets (5 trials, seed 102).
-The unguarded residual (\texttt{skill}) gets closest to the target ($0.2739$ m) but at an energy of $3.18$---more than $50\%$ above either gated variant---because it fires the residual in $18.6$ high-level steps per episode on average, nearly twice the gated rate ($10.3$).
-The heuristic gate restores energy parity with the direct controller ($2.08$ vs.\ $2.10$) while keeping most of the distance benefit.
-On this seed the direct controller has the best success rate ($0.92$), and VGSR suffered one early termination on the 2\,m target: the gate is \emph{necessary} to suppress high-energy overuse of the archive, but the current heuristic form is \emph{not sufficient} for a uniform win---consistent with the aggregate picture in Table~\ref{tab:harder}.
+\textbf{Control examples.}
+Figure~\ref{fig:traj} overlays the closed-loop XY paths for all trials of one evaluation seed: compensated and uncompensated trajectories are nearly indistinguishable in space, which is the intent, since the compensation acts on command tracking rather than on the route.
+Figure~\ref{fig:example} dissects a single episode on the hardest target and shows the predictive rescue mechanism at work: the model forecasts a posture-floor breach early in the walk, rescue-mode candidates hold the base height through the risky stretch, and the episode ends at nominal posture while the direct baseline sinks below the success threshold.
+
+\textbf{Per-target (Table~\ref{tab:pertarget}).}
+The per-target view explains the aggregate.
+Energy improves on seven of eight targets (up to $-14\%$), with the one exception, the short backward goal, at parity; final height is within a few millimeters everywhere.
+Success differences scatter in both directions at the per-target sample size ($n{=}50$): the long diagonal $(1.5,1)$ now favors VGFC ($0.800$ vs.\ $0.740$, the target the annealed correction was designed to protect), the two long forward/diagonal goals favor direct by a similar margin, and the remaining five are matched.
+We refrain from claiming any single-target success effect: across protocol versions these $n{=}50$ differences moved by $\pm 0.1$ while the energy ordering never changed, which is exactly what a real energy effect and a null success effect look like.
+
+\textbf{On final height.}
+Compensated final height sits $1$--$3$\,mm below the baseline on the Go2 families ($0.3228$ vs.\ $0.3253$ here, with near-identical CIs).
+The mechanism is inherent to the objective: among posture-safe candidates the energy minimizer prefers marginally gentler commands, and on a velocity-conditioned policy gait vigor and carried height are weakly coupled, so the cheapest safe gait stands fractionally lower.
+The posture floors and the restore mode bound this coupling to the millimeter scale (early unconstrained variants lost centimeters, and the task, with them; Section~\ref{sec:ablation-vgfc}), and the effect is not intrinsic to compensation: on ANYmal-D and H1 the compensated policy stands \emph{taller} than the baseline (Table~\ref{tab:coverage}).
+
+\textbf{On the residual failure mode.}
+Every failure on this benchmark, for both methods (81 and 78 of 400 episodes respectively), is of a single kind: the robot reaches the target region but finishes below the height criterion after its gait has settled low over the walk.
+We tested whether a posture-aware stopping rule could convert these: under a symmetric protocol where \emph{neither} controller may declare the task done while posture is low (the direct baseline keeps tracking; VGFC selects the candidate with the highest predicted posture among those staying in the target region), success does not improve for either method at $n{=}400$ per method; episodes instead spend their remaining budget attempting recovery, occasionally falling (terminations appear for both), and the extra low-motion steps dilute the per-step energy metric.
+Individual episodes are recoverable, as Figure~\ref{fig:example} shows, but at scale the arrive-low state is dominated by terrain and gait-settling dynamics that command-level intervention does not reliably reverse.
+This bounds what any compensator at this interface can claim on this success criterion, and is why our headline is energy at matched success rather than success itself.
 
 \begin{table}[t]
 \centering
-\caption{Gate ablation on Go2 harder targets (5 trials $\times$ 5 targets, seed 102). ``Resid.\ used'' is the average number of high-level steps with an active residual.}
-\label{tab:gate}
-\begin{tabular}{lcccccc}
+\caption{Per-target breakdown on the eight harder targets (50 episodes per target per method), ordered by the paired energy saving. Energy improves on seven of eight targets, by up to $12.9\%$; success differences at this sample size scatter in both directions around parity, and final height is matched to a few millimeters.}
+\label{tab:pertarget}
+\begin{tabular}{lccccccc}
 \toprule
-Method & Success $\uparrow$ & Final dist.\ (m) $\downarrow$ & Energy $\downarrow$ & Final height (m) & Term.\ $\downarrow$ & Resid.\ used \\
+& \multicolumn{3}{c}{Energy $\downarrow$} & \multicolumn{2}{c}{Success $\uparrow$} & \multicolumn{2}{c}{Final height (m)} \\
+\cmidrule(lr){2-4}\cmidrule(lr){5-6}\cmidrule(lr){7-8}
+Target (m) & VGFC & direct & $\Delta$ & VGFC & direct & VGFC & direct \\
 \midrule
-skill (no gate) & 0.800 & \textbf{0.2739} & 3.1806 & 0.3205 & 0.000 & 18.64 \\
-VGSR (ours)     & 0.840 & 0.3570 & \textbf{2.0802} & 0.3278 & 0.040 & 10.28 \\
-direct          & \textbf{0.920} & 0.2889 & 2.0988 & \textbf{0.3372} & 0.000 & 0.00 \\
+$(0,1.25)$           & \textbf{1.815} & 2.083 & $\mathbf{-12.9\%}$ & 0.940 & 0.980 & 0.340 & 0.351 \\
+$(1.75,-0.75)$       & \textbf{2.217} & 2.542 & $\mathbf{-12.8\%}$ & 0.480 & 0.520 & 0.276 & 0.285 \\
+$(-1,0.75)$          & \textbf{1.861} & 2.122 & $\mathbf{-12.3\%}$ & 1.000 & 1.000 & 0.358 & 0.367 \\
+$(0,-1.25)$          & \textbf{1.822} & 2.073 & $\mathbf{-12.1\%}$ & 0.940 & 0.980 & 0.345 & 0.350 \\
+$(1.5,1)$            & \textbf{2.203} & 2.471 & $\mathbf{-10.8\%}$ & 0.800 & 0.740 & 0.316 & 0.313 \\
+$(2,0)$              & \textbf{2.367} & 2.619 & $\mathbf{-9.6\%}$  & 0.240 & 0.260 & 0.233 & 0.224 \\
+$(1,-1)$             & \textbf{2.028} & 2.240 & $\mathbf{-9.5\%}$  & 0.980 & 0.960 & 0.355 & 0.349 \\
+$(-0.75,0)$          & 1.496 & \textbf{1.510} & $-0.9\%$ & 1.000 & 1.000 & 0.359 & 0.363 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\subsection{Learned Viability Gate}
-\label{sec:learned}
+\subsection{Systematic Coverage: Moderate, Holdout, and H1}
+\label{sec:results-coverage}
 
-\textbf{Can viability be learned?}
-Training on 2{,}879 logged decisions across 90 episode groups with an episode-group split (1{,}900 train / 979 test decisions; 68/22 groups), the deployable classifier---with all heuristic-gate outputs excluded from its inputs---reaches test accuracy $0.913$ and test AUC $0.973$.
-Decision-level features therefore carry substantial viability signal beyond the hand-designed thresholds.
-
-\textbf{Held-out directions.}
-On four holdout targets (Table~\ref{tab:holdout}), all methods are saturated at success $1.0$; learned-VGSR (intersect, $\eta = 0.999$) reduces energy relative to heuristic VGSR ($1.9096$ vs.\ $1.9346$) and raises final height, while remaining statistically indistinguishable from the direct controller.
-The learned gate is \emph{stable} on directions it never saw---the key deployment property---though not yet clearly better than direct control here.
+A compensation layer must help where the base policy is weak, do no harm where it is strong, and transfer across embodiments without hand-tuning.
+Table~\ref{tab:coverage} evaluates the same frozen configuration on the remaining task families and on two further robots.
 
 \begin{table}[t]
 \centering
-\caption{Learned-gate evaluation on holdout target directions (5 trials $\times$ 4 targets).}
-\label{tab:holdout}
+\caption{Systematic coverage with one frozen configuration per robot. Energy $\Delta$ is VGFC relative to the direct baseline evaluated inside the same runs. Success stays statistically matched everywhere while energy drops on all Go2 families and ANYmal-D; on H1, whose baseline is already efficient, the uncertainty-aware margin keeps compensation nearly inactive (2.0 activations/episode) and the energy difference is seed noise.}
+\label{tab:coverage}
+\begin{tabular}{llcccc}
+\toprule
+Family ($n$/method) & Method & Success $\uparrow$ & Energy $\downarrow$ & Energy $\Delta$ & Final height (m) \\
+\midrule
+\multirow{2}{*}{Go2 moderate (120)}
+ & VGFC   & 0.975 {\scriptsize$[0.942, 1.000]$} & \textbf{1.743} {\scriptsize$[1.689, 1.802]$} & $-5.4\%$ & 0.356 \\
+ & direct & \textbf{0.992} {\scriptsize$[0.975, 1.000]$} & 1.844 {\scriptsize$[1.763, 1.932]$} & --- & \textbf{0.362} \\
+\midrule
+\multirow{2}{*}{Go2 holdout (60)}
+ & VGFC   & \textbf{0.933} {\scriptsize$[0.867, 0.983]$} & \textbf{1.936} {\scriptsize$[1.836, 2.037]$} & $-8.0\%$ & \textbf{0.334} \\
+ & direct & 0.917 {\scriptsize$[0.833, 0.983]$} & 2.105 {\scriptsize$[1.982, 2.234]$} & --- & 0.333 \\
+\midrule
+\multirow{2}{*}{ANYmal-D, 8 targets (120)}
+ & VGFC   & \textbf{0.883} {\scriptsize$[0.825, 0.942]$} & \textbf{1.367} {\scriptsize$[1.317, 1.422]$} & $-3.9\%$ & 0.500 \\
+ & direct & 0.875 {\scriptsize$[0.817, 0.933]$} & 1.422 {\scriptsize$[1.373, 1.471]$} & --- & 0.500 \\
+\midrule
+\multirow{2}{*}{H1 (45)}
+ & VGFC   & \textbf{1.000} & 0.549 {\scriptsize$[0.496, 0.605]$} & $+2.1\%$ & \textbf{1.019} \\
+ & direct & \textbf{1.000} & \textbf{0.538} {\scriptsize$[0.496, 0.582]$} & --- & 1.011 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Moderate and holdout targets.}
+Energy drops on both families ($-5.4\%$ and $-8.0\%$) at statistically matched success ($0.975$ vs.\ $0.992$ and $0.933$ vs.\ $0.917$, CIs overlapping in both directions).
+The holdout family matters most: these directions were never seen during any tuning, so the frozen gates generalize across the command box, which is the property retrieval cannot offer (Section~\ref{sec:results-retrieval}: the archive variant \emph{costs} energy on these directions).
+
+\textbf{Third embodiment, zero re-tuning: ANYmal-D.}
+Applying the recipe unchanged to a different quadruped on the full eight-target benchmark reduces energy by $3.9\%$ at matched success ($0.883$ vs.\ $0.875$), with identical final posture and zero terminations; the paired energy difference is negative on all three ANYmal seeds.
+Since not a single parameter was adjusted, this is evidence that the compensation exploits a structural property of proportional command tracking on rough terrain rather than a Go2-specific quirk, and that the identification recipe is the only per-robot component the method needs.
+(The retrieval variant is absent from this row by construction: VGSR requires building and curating a per-robot behavior archive, which is exactly the dependency the response model removes.)
+
+\textbf{H1 humanoid.}
+The H1 baseline walks at $\approx 0.52$ energy per step, already near its efficiency floor, and the H1 response model's energy resolution is coarse relative to that scale (MAE $0.21$, $\approx 40\%$ of the per-step baseline, versus $18\%$ for Go2).
+With the margin sized to that uncertainty ($25\%$ required predicted saving), VGFC activates only $2.0$ times per episode, and the result is the correct one: saturated success, slightly taller posture, and an energy difference that is pure seed noise ($+2.1\%$ mean, with per-seed values swinging from $-17\%$ to $+13\%$ at 15 episodes per seed; Figure~\ref{fig:paired}).
+The gate declining to compensate an already-efficient policy is the intended behavior of an uncertainty-aware margin, and it is exactly what the absolute-margin ablation of Section~\ref{sec:ablation-vgfc} failed to do.
+
+\subsection{Retrieval-Based Compensation: What the Archive Buys}
+\label{sec:results-retrieval}
+
+The retrieval variant was evaluated extensively before VGFC existed; we first compare head-to-head, then summarize the study it produced.
+
+\textbf{Head-to-head.}
+The three methods were evaluated inside the same runs on the original five-target protocol (5 seeds $\times$ 10 trials, 250 episodes per method, pre-annealing VGFC configuration).
+There, VGSR reaches VGFC's energy level on the harder family ($2.061$ vs.\ $2.073$, both $\approx 12\%$ below direct) but with a $1.2\%$ termination rate and lower final height; on moderate targets its saving is smaller at lower success; and on holdout directions and H1 it \emph{costs} energy ($+3.8\%$, $+4.4\%$) where VGFC saves ($-8\%$) or stays neutral.
+The pattern is exactly the coverage argument of Section~\ref{sec:retrieval}: retrieval compensates well where the archive is dense (the harder targets it was built around) and degrades off its support, while the response model generalizes across the command box.
+
+\textbf{Multi-seed aggregate.}
+In a five-seed, 200-episode-per-method aggregate on the harder targets, VGSR reduced energy by $7.8\%$ ($1.99$ vs.\ $2.16$, non-overlapping bootstrap CIs) at statistically indistinguishable success ($0.785$ vs.\ $0.800$): consistent, but smaller than VGFC's gains and without success improvement.
+
+\textbf{Gate necessity.}
+Removing VGSR's gate leaves final distance intact but inflates energy by over $50\%$ ($3.18$ vs.\ $2.08$), with the residual firing at nearly twice the gated rate: the archive without an activation mechanism is a net energetic negative.
+
+\textbf{Archive capacity is not the knob.}
+Trimming the 3{,}904-chunk archive to its top-2{,}000 chunks by utility \emph{improved} success on a shared seed ($0.840$ vs.\ $0.680$), while a top-500 archive gave the lowest energy ($1.75$) at reduced success ($0.760$); all sizes reduced energy versus direct.
+Quality filtering, not capacity, carries the retrieval variant, and its non-monotonicity is a tuning liability the response model does not have.
+
+\textbf{Learned decision gates.}
+A decision-level viability classifier trained on logged gate decisions (episode-group split, heuristic-gate outputs excluded from inputs) reaches AUC $0.97$, and deployed in intersection with the physical guard it is stable on held-out directions; but trained on episode-level success labels it learns ``low-energy, goal-approaching'' as a proxy and loses success on the height-limited 2\,m target.
+VGFC's gate resolves exactly this: its safety signal is a \emph{predicted physical quantity} (posture height) rather than a correlate of episode outcome.
+
+\subsection{Ablating VGFC's Components}
+\label{sec:ablation-vgfc}
+
+Which parts of VGFC carry the result?
+We ablate one component at a time on the eight-target benchmark under a shared protocol (2 seeds $\times$ 5 trials $\times$ 8 targets $=$ 80 episodes per variant, with the paired direct baseline inside each run; Table~\ref{tab:vgfc-ablation}):
+\emph{no annealing} disables the goal-proximity decay of the correction gain;
+\emph{no gate} removes all posture safeguards (height floors, rescue, and restore), leaving only the progress floor;
+\emph{no progress floor} sets $\beta = 0$, leaving only the posture safeguards;
+\emph{substitution} sets $\alpha = 1$, executing the selected candidate verbatim;
+and \emph{25\% data} uses a response model identified from a quarter of the excitation data ($\approx$ one minute of simulation).
+
+\begin{table}[t]
+\centering
+\caption{VGFC component ablations on the eight-target benchmark (2 seeds $\times$ 5 trials $\times$ 8 targets $=$ 80 episodes per variant). $\Delta$ columns are paired against the direct baseline evaluated inside the same runs; at $n{=}80$ success differences below $\sim$0.08 are noise-level, so the full-protocol estimates of Section~\ref{sec:results-harder} remain the calibrated numbers.}
+\label{tab:vgfc-ablation}
 \begin{tabular}{lccccc}
 \toprule
-Method & Success $\uparrow$ & Final dist.\ (m) $\downarrow$ & Energy $\downarrow$ & Final height (m) & Resid.\ used \\
+Variant & Success & $\Delta$ succ (paired) & Energy & $\Delta$ energy (paired) & Comp.\ steps \\
 \midrule
-learned-VGSR (intersect) & 1.000 & 0.2911 & \textbf{1.9096} & \textbf{0.3622} & 8.30 \\
-VGSR (heuristic)         & 1.000 & \textbf{0.2877} & 1.9346 & 0.3577 & 10.50 \\
-direct                   & 1.000 & 0.2890 & 1.9063 & 0.3585 & 0.00 \\
+VGFC (full)             & \textbf{0.812} & $+0.012$ & 1.987 & $-12.2\%$  & 11.7 \\
+no annealing            & 0.800 & $+0.013$ & 2.014 & $-12.2\%$  & 12.3 \\
+no viability gate       & 0.800 & $-0.025$ & 2.142 & $-4.8\%$   & 8.9 \\
+no progress floor       & 0.787 & $-0.037$ & \textbf{1.783} & $-19.6\%$ & 19.8 \\
+substitution ($\alpha{=}1$) & 0.750 & $-0.050$ & 1.890 & $-14.0\%$ & 16.3 \\
+25\% identification data & 0.800 & $-0.012$ & 2.077 & $-6.4\%$   & 10.7 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\textbf{Harder targets expose the label problem.}
-On harder targets (Table~\ref{tab:learnedharder}, seed 103), learned-VGSR achieves the best final distance ($0.2779$) and energy ($1.9232$) but the \emph{worst} success ($0.760$), losing episodes on the 2\,m forward target through the height criterion.
-The diagnosis is instructive: episode-level success labels teach the classifier that ``low-energy, goal-approaching'' decisions are good, which correlates with---but is not identical to---``arriving at a safe height.''
-The learned gate optimizes the correlation and misses the causal requirement.
-Mode ablations reinforce the point: \texttt{replace} mode at threshold $0.5$ over-accepts residuals and underperforms direct control; even at $0.999$ it remains too aggressive.
-Intersection with the physical guard is currently the only reliable deployment mode.
+The ablations separate the components' roles.
+\textbf{The gate converts predicted savings into realized ones.}
+Removing the posture safeguards does not unleash deeper savings; it forfeits most of them ($-4.8\%$ vs.\ $-12.2\%$) while flipping the paired success difference negative: candidates that look efficient to the model but leave the well-behaved posture regime burn their predicted savings in the recovery dynamics that follow.
+The viability gate is not a tax on compensation; it is the mechanism by which open-loop predictions survive contact with the closed loop.
+\textbf{The progress floor bounds behavioral drift.}
+Without it the compensator is active at nearly every step (19.8 vs.\ 11.7) and realizes the deepest raw saving ($-19.6\%$), but the paired success difference is the second worst in the table and posture is lower; the floor is the conservative tether that keeps the compensated trajectory recognizable as the commanded task.
+\textbf{Bounding the correction is the robustness mechanism.}
+Substitution pays the largest paired success cost ($-5.0$ points here, $-6.4$ points in an earlier 250-episode five-seed protocol) for savings the bounded correction largely retains.
+\textbf{Annealing is posture insurance, not an energy knob.}
+Disabling the goal-proximity decay leaves aggregate energy unchanged ($-12.2\%$ either way); the component exists to return terminal-approach authority to the base policy, and its effect is target-specific rather than aggregate.
+\textbf{Identification is cheap and degrades gracefully.}
+With a quarter of the excitation data ($\approx$ one minute of simulation), success stays at parity and the saving shrinks from $-12.2\%$ to $-6.4\%$: the binding resource is the energy channel's accuracy ($R^2$ $0.62$ vs.\ $0.75$), precisely the channel the margin guards, and the safety components hold regardless.
 
-\begin{table}[t]
-\centering
-\caption{Learned gate on Go2 harder targets (5 trials $\times$ 5 targets, seed 103).}
-\label{tab:learnedharder}
-\begin{tabular}{lccccc}
-\toprule
-Method & Success $\uparrow$ & Final dist.\ (m) $\downarrow$ & Energy $\downarrow$ & Final height (m) & Resid.\ used \\
-\midrule
-learned-VGSR (intersect) & 0.760 & \textbf{0.2779} & \textbf{1.9232} & 0.3093 & 7.76 \\
-VGSR (heuristic)         & \textbf{0.800} & 0.2865 & 2.0267 & 0.3180 & 8.52 \\
-direct                   & \textbf{0.800} & 0.2896 & 2.0812 & \textbf{0.3333} & 0.00 \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\subsection{Cross-Embodiment: H1 Humanoid}
-\label{sec:h1}
-
-On H1 rough-terrain targets (Table~\ref{tab:h1}), the direct controller is already saturated (success $1.0$), leaving no headroom.
-VGSR matches success and final distance (marginally better, $0.2905$ vs.\ $0.2911$), stands slightly taller, and costs slightly more energy.
-We present this strictly as a \emph{stability-of-transfer} result: the same archive pipeline, descriptors, and gate applied to a humanoid neither destabilize the controller nor degrade its performance.
-It is not evidence of improvement, and we do not claim any.
-
-\begin{table}[t]
-\centering
-\caption{H1 humanoid, rough terrain (5 trials $\times$ 3 targets). The direct controller is saturated; the result demonstrates transfer stability, not improvement.}
-\label{tab:h1}
-\begin{tabular}{lccccc}
-\toprule
-Method & Success & Final dist.\ (m) $\downarrow$ & Energy $\downarrow$ & Final height (m) & Term.\ $\downarrow$ \\
-\midrule
-VGSR (ours) & 1.000 & \textbf{0.2905} & 0.5394 & 1.0169 & 0.000 \\
-direct      & 1.000 & 0.2911 & \textbf{0.4971} & 1.0091 & 0.000 \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\subsection{Negative Results and Failure Modes}
-\label{sec:negative}
-
-We report five negative results that shaped the design and bound the claims.
-
-\textbf{(1) Raw action replay fails.}
-Replaying archived joint-action chunks open-loop---the classic ``skill as option'' execution---reliably destabilizes both Go2 and H1 on rough terrain, through the initial-state-mismatch and error-accumulation modes of Section~\ref{sec:intro}.
-This failure is why VGSR operates in command space at all.
-
-\textbf{(2) The 2\,m forward target is height-limited.}
-On long forward targets the robot frequently reaches the XY neighborhood but finishes below the height threshold and fails.
-Reactive low-height gates were tested at two settings: an aggressive variant preserves height but suppresses useful progress; a balanced variant preserves energy but still fails the height criterion.
-Post-hoc command gating is too late once the base policy has entered a crouched, low-viability regime---recovery must be predicted \emph{before} it is needed, not reacted to.
-
-\textbf{(3) Learned gate in replace mode over-accepts} (Section~\ref{sec:learned}), at both $\eta = 0.5$ and $\eta = 0.999$.
-
-\textbf{(4) Weaker blending is not automatically safer.}
-Lowering the residual blend cap to $0.25$ caused an unstable right-diagonal holdout target in one seed; residual strength and gating interact nonlinearly, so ``smaller residual'' is not a substitute for a better gate.
-
-\textbf{(5) The archive alone is not the contribution.}
-Table~\ref{tab:gate} shows that an ungated archive is a net negative on energy.
-Any claim that a skill archive helps locomotion must be paired with an activation mechanism; in our experiments the gate, not the archive, is the binding constraint.
+Two further design choices are supported by earlier evidence at scale.
+\textbf{Full substitution degrades off the tuning seed}: across the 250-episode five-seed protocol, the substitution variant saved $18.7\%$ energy but lost $6.4$ success points against direct ($0.664$ vs.\ $0.728$). Model error and beyond-horizon posture drift accumulate when the compensator fully owns the command, which is why the correction is bounded.
+\textbf{Margins must be relative and uncertainty-aware}: an absolute energy margin carried from Go2 to H1 \emph{increased} H1 energy by $13.5\%$, because the H1 model's energy resolution ($\approx 40\%$ of the H1 per-step baseline) admitted phantom savings; the relative margin of Section~\ref{sec:vgfc}, sized to that uncertainty, is what produces the do-no-harm H1 row of Table~\ref{tab:coverage}.
 
 \section{Limitations and Future Work}
 \label{sec:limitations}
 
-\textbf{Scope of the empirical claim.}
-The positive result is an energy reduction with a marginal success advantage on harder Go2 targets against a strong pretrained controller, plus gate-ablation and holdout-stability evidence.
-It is not an across-the-board win: final distance and height are not uniformly better, H1 shows no improvement, and one gate-ablation seed favors the direct controller on success.
-Evaluations use 25--100 episodes per method per setting; wider multi-seed sweeps would tighten the intervals.
+\textbf{Scope.}
+All results are in simulation, on target reaching, with velocity-commanded locomotion policies across three embodiments; the framework itself only assumes a continuous-control policy with a command interface, and extending the evaluation to other continuous-control settings (end-effector-commanded manipulation, style-commanded character control~\citep{peng2022ase}) is the most direct test of that generality.
+The recipe requires per-robot identification (four minutes of simulation and minutes of training per robot); ANYmal-D shows that identification is the \emph{only} per-robot component, but it remains a component.
+Hardware transfer, where energy savings matter most, is the natural next step; the identification recipe applies unchanged wherever the policy can be safely excited.
 
-\textbf{Episode-level viability labels are too coarse.}
-The learned gate's failure on the 2\,m target traces to labels that reward correlates of success rather than height-safe arrival.
-The natural fix is short-horizon labels: for each logged decision, compare executing the residual versus the direct command over the next $N$ steps on progress, height safety, and energy-normalized progress, turning the discriminator into a genuine applicability model.
+\textbf{Model horizon.}
+The 16-step response horizon captures immediate consequences but not slow drift; the restore mode papers over this with measured-height feedback.
+A multi-horizon or recurrent response model could subsume that branch.
 
-\textbf{Post-hoc gating cannot rescue an unviable base state.}
-Once the low-level policy is crouched, no command filter recovers it (negative result 2).
-Complementary directions: a viability model that predicts height collapse before residual execution, or a base policy trained with stronger upright-recovery objectives.
+\textbf{Candidate enumeration.}
+Inversion by enumerating $\sim$70 candidates is trivially cheap but coarse; gradient-based inversion through $f_\phi$ or a learned amortized compensator could refine it, at the cost of the enumeration's robustness to model error.
 
-\textbf{Breadth.}
-All results are in simulation, on target reaching, with one archive configuration per robot.
-Archive-size ablations, path following, disturbance recovery, stairs/slopes, and hardware transfer are open.
-The framework is low-level-controller-agnostic in principle---any velocity-conditioned policy exposes the required interface~\citep{margolis2022walk,kumar2021rma}---but we have only instantiated RSL-RL checkpoints.
+\textbf{Task interface.}
+The current task family is target reaching with a proportional reference; richer tasks (path following, disturbance recovery, velocity schedules) would exercise the compensator's progress constraint differently and remain untested.
 
 \section{Conclusion}
 \label{sec:conclusion}
 
-We presented VGSR, a test-time framework that turns rollouts of a converged locomotion policy into an online behavioral archive and reuses that archive as viability-gated, command-space residuals over the same pretrained controller.
-Across Isaac Lab rough-terrain experiments the evidence supports a calibrated conclusion: raw action replay is unreliable; command-space residuals are the right interface; viability gating is necessary to prevent energetic overuse of the archive; and the combination yields consistent energy savings with marginal success gains on harder Go2 targets while remaining neutral on a saturated H1 task.
-Viability itself is learnable from decision features, though episode-level labels are not yet sufficient for height-safe deployment.
-The broader suggestion is that for contact-rich locomotion, skill archives are best understood not as libraries of replayable behaviors but as \emph{guarded command priors} over strong low-level controllers.
+We presented VGFC, which compensates a frozen learned continuous-control policy the way classical control compensates a plant: identify the command-response of the closed loop from the policy's own excitation rollouts, then invert that model at the command interface behind a viability gate that predicts posture safety before execution.
+On Isaac Lab rough terrain, VGFC systematically improves the energy economy of the strong pretrained Go2 controller it compensates ($5$--$11\%$ lower energy at statistically matched success on every task family evaluated, negative on every evaluation seed); transfers to ANYmal-D with zero re-tuning; and on the H1 humanoid, whose baseline is already efficient, an uncertainty-aware margin correctly leaves the policy nearly untouched.
+The retrieval-based alternative, given a full multi-seed study of its own, captures a smaller energy gain and inherits archive-coverage liabilities; and the component ablations map each safeguard onto its role: the gate converts predicted savings into realized ones, the progress floor bounds behavioral drift, and the bounded correction is what keeps model error from buying energy with success.
+A learned policy's own experience, we conclude, is most useful not as a library of behaviors to replay but as identification data for the system the policy has become; compensation through that identified model is a cheap, training-free layer that any command-conditioned policy can wear.
 
 \subsubsection*{Reproducibility}
 All experiments use public Isaac Lab environments and public pretrained RSL-RL checkpoints.
-Archive construction, evaluation, viability-model training, and plotting code, together with all result files aggregated in this paper, are available in the project repository.
+Excitation collection, response-model training, evaluation, and plotting code, together with all result files aggregated in this paper, are available in the project repository.
 
 \bibliographystyle{unsrtnat}
 \bibliography{references}

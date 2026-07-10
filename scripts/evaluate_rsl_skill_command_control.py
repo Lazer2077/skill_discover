@@ -86,6 +86,27 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--guard_low_height_command_scale", type=float, default=0.5)
     parser.add_argument("--viability_model", type=str, default=None)
+    parser.add_argument("--response_model", type=str, default=None,
+                        help="Command-response model for model_feedforward_command.")
+    parser.add_argument("--ff_progress_floor", type=float, default=0.9,
+                        help="Candidate must retain at least this fraction of the direct command's predicted progress.")
+    parser.add_argument("--ff_min_height_fraction", type=float, default=0.85,
+                        help="Fraction of start height below which predicted min height is considered unsafe.")
+    parser.add_argument("--ff_rescue_height_fraction", type=float, default=0.8,
+                        help="Rescue mode triggers only if the direct command's predicted min height falls below this fraction of nominal.")
+    parser.add_argument("--ff_energy_margin_frac", type=float, default=0.1,
+                        help="Required fractional predicted energy saving over the direct command before compensating.")
+    parser.add_argument("--ff_current_height_fraction", type=float, default=0.9,
+                        help="If the base is below this fraction of nominal relative height, fall back to the direct command to restore posture.")
+    parser.add_argument("--ff_max_height_drop", type=float, default=0.02,
+                        help="Candidates whose predicted mean relative height falls more than this below the current one are rejected.")
+    parser.add_argument("--ff_blend", type=float, default=0.5,
+                        help="Feedforward correction gain: executed command is c_goal + blend * (c_best - c_goal).")
+    parser.add_argument("--ff_anneal_distance", type=float, default=0.5,
+                        help="Correction gain is scaled by clip(distance/this, 0, 1); near the goal the direct command regains full authority. 0 disables annealing.")
+    parser.add_argument("--ff_height_scan_slice", type=str, default="48:235",
+                        help="Obs slice holding the height scan used for terrain-relative posture height.")
+    parser.add_argument("--ff_height_scan_offset", type=float, default=0.5)
     parser.add_argument("--viability_threshold", type=float, default=0.5)
     parser.add_argument(
         "--viability_filter_mode",
@@ -229,6 +250,7 @@ def main() -> None:
             "skill_command",
             "guarded_skill_command",
             "learned_guarded_skill_command",
+            "model_feedforward_command",
             "direct_target_command",
             "random_command",
             "zero_command",
@@ -240,6 +262,8 @@ def main() -> None:
             raise ValueError("--methods must include at least one method.")
         if "learned_guarded_skill_command" in methods and not args.viability_model:
             raise ValueError("--viability_model is required for learned_guarded_skill_command.")
+        if "model_feedforward_command" in methods and not args.response_model:
+            raise ValueError("--response_model is required for model_feedforward_command.")
         action_set = OnlineActionSet.load(args.online_action_set)
         command_slices = parse_obs_slices(args.command_slice)
         if not command_slices:
@@ -337,6 +361,73 @@ def main() -> None:
                 logits = viability_model(torch.from_numpy(values)).squeeze()
                 return float(torch.sigmoid(logits).item())
 
+        response_model = None
+        response_stats = None
+        if args.response_model:
+            try:
+                rm_data = torch.load(args.response_model, map_location="cpu", weights_only=False)
+            except TypeError:
+                rm_data = torch.load(args.response_model, map_location="cpu")
+            rm_hidden = int(rm_data["hidden_dim"])
+            rm_dropout = float(rm_data.get("dropout", 0.0))
+            response_model = torch.nn.Sequential(
+                torch.nn.Linear(int(rm_data["obs_dim"]), rm_hidden),
+                torch.nn.ReLU(),
+                torch.nn.Dropout(rm_dropout),
+                torch.nn.Linear(rm_hidden, rm_hidden),
+                torch.nn.ReLU(),
+                torch.nn.Dropout(rm_dropout),
+                torch.nn.Linear(rm_hidden, len(rm_data["output_names"])),
+            )
+            response_model.load_state_dict(rm_data["state_dict"])
+            response_model.eval()
+            response_stats = {
+                "x_mean": np.asarray(rm_data["x_mean"], dtype=np.float32),
+                "x_std": np.asarray(rm_data["x_std"], dtype=np.float32),
+                "y_mean": np.asarray(rm_data["y_mean"], dtype=np.float32),
+                "y_std": np.asarray(rm_data["y_std"], dtype=np.float32),
+                "output_names": list(rm_data["output_names"]),
+            }
+
+        def _ff_candidate_commands(target_command: np.ndarray) -> np.ndarray:
+            cands = [np.asarray(target_command, dtype=np.float32)]
+            for s in (0.4, 0.6, 0.8, 1.2):
+                cands.append(np.clip(target_command * s, -args.command_max, args.command_max))
+            for dyaw in (-0.4, -0.2, 0.2, 0.4):
+                c = np.array(target_command, dtype=np.float32)
+                if command_dim >= 3:
+                    c[2] = float(np.clip(c[2] + dyaw, -args.command_max, args.command_max))
+                cands.append(c)
+            base_ang = float(np.arctan2(target_command[1], target_command[0])) if command_dim >= 2 else 0.0
+            base_yaw = float(target_command[2]) if command_dim >= 3 else 0.0
+            for speed in (0.25, 0.5, 0.75, 1.0):
+                for dang in (-0.6, -0.3, 0.0, 0.3, 0.6):
+                    for yaw_scale in (0.0, 0.5, 1.0):
+                        c = np.zeros(command_dim, dtype=np.float32)
+                        ang = base_ang + dang
+                        if command_dim >= 2:
+                            c[0] = speed * np.cos(ang)
+                            c[1] = speed * np.sin(ang)
+                        if command_dim >= 3:
+                            c[2] = base_yaw * yaw_scale
+                        cands.append(np.clip(c, -args.command_max, args.command_max))
+            return np.unique(np.stack(cands).astype(np.float32), axis=0)
+
+        def predict_responses(obs_vec: np.ndarray, candidates: np.ndarray) -> np.ndarray:
+            X = np.tile(obs_vec[None, :], (candidates.shape[0], 1)).astype(np.float32)
+            lo, hi = command_slice
+            X[:, lo : min(hi, X.shape[1])] = candidates[:, : max(0, min(hi, X.shape[1]) - lo)]
+            Xn = (X - response_stats["x_mean"]) / response_stats["x_std"]
+            with torch.inference_mode():
+                pred_n = response_model(torch.from_numpy(Xn.astype(np.float32))).numpy()
+            return pred_n * response_stats["y_std"] + response_stats["y_mean"]
+
+        ff_scan_slice = parse_obs_slices(args.ff_height_scan_slice)[0]
+
+        def relative_height(obs_vec: np.ndarray) -> float:
+            lo, hi = ff_scan_slice
+            return float(np.mean(obs_vec[lo:hi]) + args.ff_height_scan_offset)
+
         rng = np.random.default_rng(args.seed)
 
         def rollout(method: str, target_offset: np.ndarray, trial_seed: int) -> Dict[str, Any]:
@@ -351,6 +442,9 @@ def main() -> None:
             start_state = state_reader.get_robot_state()
             start_pos = start_state["base_pos"][0]
             start_height = float(start_pos[2])
+            start_rel_height = (
+                relative_height(_obs_for_feature(obs)[0]) if response_model is not None else 0.0
+            )
             target = np.asarray(target_offset, dtype=np.float64)
             if args.relative_targets:
                 target = start_pos[:2].astype(np.float64) + target
@@ -358,6 +452,7 @@ def main() -> None:
             selected: List[int] = []
             decisions: List[Dict[str, Any]] = []
             positions: List[List[float]] = []
+            ff_activations = 0
             energy_total, energy_steps = 0.0, 0
             terminated_early = False
             rng = np.random.default_rng(trial_seed)
@@ -370,7 +465,13 @@ def main() -> None:
                 distance = float(np.linalg.norm(target - pos[:2]))
                 recovery_height = args.guard_recovery_height_fraction * max(start_height, 1e-6)
                 needs_recovery = (
-                    method in {"guarded_skill_command", "learned_guarded_skill_command"}
+                    method
+                    in {
+                        "guarded_skill_command",
+                        "learned_guarded_skill_command",
+                        "model_feedforward_command",
+                        "direct_target_command",
+                    }
                     and args.guard_recovery_height_fraction > 0.0
                     and distance < args.target_threshold
                     and float(pos[2]) < recovery_height
@@ -387,15 +488,46 @@ def main() -> None:
                         args.command_max,
                         args.yaw_command_gain,
                     )
-                    command = float(np.clip(args.guard_recovery_command_scale, 0.0, 1.0)) * target_command
-                    decisions.append(
-                        {
-                            "recovery": True,
-                            "current_distance": distance,
-                            "current_height": float(pos[2]),
-                            "target_recovery_height": recovery_height,
-                        }
-                    )
+                    if method == "model_feedforward_command":
+                        # Predictive terminal recovery: among commands whose predicted end
+                        # position stays inside the target radius, pick the one the response
+                        # model expects to raise posture most. Reactive standing does not
+                        # restore posture; model-selected stepping motion can.
+                        obs_vec = _obs_for_feature(obs)[0]
+                        candidates = _ff_candidate_commands(target_command)
+                        preds = predict_responses(obs_vec, candidates)
+                        j = {n: i for i, n in enumerate(response_stats["output_names"])}
+                        local_xy = np.asarray(local_target[:2], dtype=np.float64)
+                        pred_dist = np.sqrt(
+                            (local_xy[0] - preds[:, j["delta_x"]]) ** 2
+                            + (local_xy[1] - preds[:, j["delta_y"]]) ** 2
+                        )
+                        stay = pred_dist <= args.target_threshold
+                        if not bool(stay.any()):
+                            stay[:] = True
+                        best_idx = int(np.argmax(np.where(stay, preds[:, j["min_height"]], -np.inf)))
+                        command = candidates[best_idx]
+                        ff_activations += 1
+                        decisions.append(
+                            {
+                                "ff_mode": "terminal_recovery",
+                                "ff_active": True,
+                                "current_distance": distance,
+                                "current_height": float(pos[2]),
+                                "target_recovery_height": recovery_height,
+                                "command": [float(v) for v in command],
+                            }
+                        )
+                    else:
+                        command = float(np.clip(args.guard_recovery_command_scale, 0.0, 1.0)) * target_command
+                        decisions.append(
+                            {
+                                "recovery": True,
+                                "current_distance": distance,
+                                "current_height": float(pos[2]),
+                                "target_recovery_height": recovery_height,
+                            }
+                        )
                 elif method in {"skill_command", "guarded_skill_command", "learned_guarded_skill_command"}:
                     local_target = world_to_body_2d(target - pos[:2], yaw)
                     target_command = _target_command(
@@ -529,6 +661,102 @@ def main() -> None:
                     decision_record = asdict(decision)
                     decision_record["guard"] = guard_info
                     decisions.append(decision_record)
+                elif method == "model_feedforward_command":
+                    local_target = world_to_body_2d(target - pos[:2], yaw)
+                    target_command = _target_command(
+                        local_target,
+                        command_dim,
+                        args.command_gain,
+                        args.command_max,
+                        args.yaw_command_gain,
+                    )
+                    obs_vec = _obs_for_feature(obs)[0]
+                    candidates = _ff_candidate_commands(target_command)
+                    preds = predict_responses(obs_vec, candidates)
+                    names = response_stats["output_names"]
+                    j = {n: i for i, n in enumerate(names)}
+                    pred_dx = preds[:, j["delta_x"]]
+                    pred_dy = preds[:, j["delta_y"]]
+                    pred_energy = preds[:, j["energy"]]
+                    pred_min_h = preds[:, j["min_height"]]
+                    local_xy = np.asarray(local_target[:2], dtype=np.float64)
+                    pred_dist = np.sqrt(
+                        (local_xy[0] - pred_dx) ** 2 + (local_xy[1] - pred_dy) ** 2
+                    )
+                    pred_mean_h = preds[:, j["mean_height"]]
+                    pred_progress = distance - pred_dist
+                    direct_idx = int(
+                        np.argmin(np.linalg.norm(candidates - target_command[None, :], axis=1))
+                    )
+                    height_floor = args.ff_min_height_fraction * max(start_rel_height, 1e-6)
+                    rescue_floor = args.ff_rescue_height_fraction * max(start_rel_height, 1e-6)
+                    height_safe = pred_min_h >= height_floor
+                    direct_progress = float(pred_progress[direct_idx])
+                    direct_safe = bool(pred_min_h[direct_idx] >= rescue_floor)
+                    current_height = relative_height(obs_vec)
+                    posture_low = current_height < args.ff_current_height_fraction * max(start_rel_height, 1e-6)
+                    mode = "follow"
+                    if posture_low and direct_safe:
+                        # Posture restoration: the base has sagged below the operating band.
+                        # The aggressive direct tracking command restores height reliably, so
+                        # compensation is suspended until posture recovers.
+                        mode = "restore"
+                        best_idx = direct_idx
+                        ff_active = False
+                    elif not direct_safe:
+                        # Predictive height rescue: the model expects the direct command to
+                        # drive the base below the safety floor within the horizon. Pick the
+                        # candidate with the highest predicted min height among those that
+                        # still make non-negative progress.
+                        mode = "rescue"
+                        rescue_mask = pred_progress >= 0.0
+                        if not bool(rescue_mask.any()):
+                            rescue_mask = np.ones(len(candidates), dtype=bool)
+                        best_idx = int(np.argmax(np.where(rescue_mask, pred_min_h, -np.inf)))
+                        ff_active = best_idx != direct_idx
+                    else:
+                        # Feedforward energy compensation: keep at least ff_progress_floor of
+                        # the direct command's predicted progress, stay height-safe, and pick
+                        # the lowest predicted energy. Activate only if the saving clears the
+                        # margin.
+                        required = args.ff_progress_floor * max(direct_progress, 0.0)
+                        no_height_decline = pred_mean_h >= current_height - args.ff_max_height_drop
+                        eligible = height_safe & no_height_decline & (pred_progress >= required)
+                        eligible[direct_idx] = True
+                        cand_energy = np.where(eligible, pred_energy, np.inf)
+                        best_idx = int(np.argmin(cand_energy))
+                        ff_active = bool(
+                            pred_energy[best_idx]
+                            < pred_energy[direct_idx] * (1.0 - args.ff_energy_margin_frac)
+                        )
+                        if not ff_active:
+                            best_idx = direct_idx
+                    if ff_active:
+                        blend = float(np.clip(args.ff_blend, 0.0, 1.0))
+                        if args.ff_anneal_distance > 0.0:
+                            blend *= float(np.clip(distance / args.ff_anneal_distance, 0.0, 1.0))
+                        command = np.clip(
+                            target_command + blend * (candidates[best_idx] - target_command),
+                            -args.command_max,
+                            args.command_max,
+                        ).astype(np.float32)
+                        ff_activations += 1
+                    else:
+                        command = target_command
+                    decisions.append(
+                        {
+                            "ff_active": ff_active,
+                            "ff_mode": mode,
+                            "current_distance": distance,
+                            "command": [float(v) for v in command],
+                            "pred_progress_best": float(pred_progress[best_idx]),
+                            "pred_progress_direct": direct_progress,
+                            "pred_energy_best": float(pred_energy[best_idx]),
+                            "pred_energy_direct": float(pred_energy[direct_idx]),
+                            "pred_min_height_best": float(pred_min_h[best_idx]),
+                            "pred_min_height_direct": float(pred_min_h[direct_idx]),
+                        }
+                    )
                 elif method == "direct_target_command":
                     local_target = world_to_body_2d(target - pos[:2], yaw)
                     command = _target_command(
@@ -581,7 +809,7 @@ def main() -> None:
                 "num_commands_used": (
                     len(selected)
                     if method in {"skill_command", "guarded_skill_command", "learned_guarded_skill_command"}
-                    else 0
+                    else (ff_activations if method == "model_feedforward_command" else 0)
                 ),
                 "selected_archive_indices": selected,
                 "decisions": decisions,
@@ -652,6 +880,15 @@ def main() -> None:
                 "guard_recovery_command_scale": args.guard_recovery_command_scale,
                 "min_final_height_fraction": args.min_final_height_fraction,
                 "relative_targets": args.relative_targets,
+                "response_model": args.response_model,
+                "ff_progress_floor": args.ff_progress_floor,
+                "ff_min_height_fraction": args.ff_min_height_fraction,
+                "ff_rescue_height_fraction": args.ff_rescue_height_fraction,
+                "ff_energy_margin_frac": args.ff_energy_margin_frac,
+                "ff_current_height_fraction": args.ff_current_height_fraction,
+                "ff_max_height_drop": args.ff_max_height_drop,
+                "ff_blend": args.ff_blend,
+                "ff_anneal_distance": args.ff_anneal_distance,
             },
             "summary": summary,
             "records": records,

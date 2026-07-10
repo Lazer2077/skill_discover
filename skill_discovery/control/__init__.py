@@ -1,8 +1,6 @@
-"""Skill-space controllers."""
+"""Command-space controllers used by the VGFC/VGSR evaluation pipeline."""
 
-from .discriminator_skill_composer import DiscriminatorGuidedSkillComposer
-from .learned_mpc_composer import LearnedMPCSkillComposer
-from .skill_composer import GreedySkillComposer
-from .skill_mpc import SkillMPC
+from .archive_chunk_composer import ArchiveChunkComposer
+from .skill_composer import CompositionResult
 
-__all__ = ["DiscriminatorGuidedSkillComposer", "LearnedMPCSkillComposer", "GreedySkillComposer", "SkillMPC"]
+__all__ = ["ArchiveChunkComposer", "CompositionResult"]
