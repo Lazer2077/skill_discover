@@ -84,25 +84,38 @@ Feedforward compensation pre-corrects a reference using a plant model, leaving f
 VGFC transports this structure to learned policies: the ``plant'' is the policy-robot closed loop, the model is a learned network, and inversion is a discrete search over the command set.
 The novelty is not the control-theoretic template but its instantiation on top of a frozen RL policy, with the model identified from the policy's own rollouts.
 
-\textbf{Learned dynamics models and MPC.}
-Model-based RL learns dynamics models for planning or policy optimization~\citep{nagabandi2018neural}.
-VGFC's response model differs in \emph{what} it models: not the robot's raw action-level dynamics but the short-horizon response of the \emph{closed loop}, policy included, to its command input.
-This makes the model low-dimensional at the interface (a 3-D velocity command), cheap to invert by enumeration, and inherently respectful of the policy's competence: the search space is ``commands the policy understands,'' not raw torques.
+\textbf{Model-based RL.}
+Learning a dynamics model and exploiting it for control is one of the oldest programs in RL: Gaussian-process models enable data-efficient policy search~\citep{deisenroth2011pilco}, probabilistic neural ensembles support sampling-based planning within a handful of trials~\citep{chua2018deep}, short model-generated rollouts accelerate policy optimization~\citep{janner2019trust}, latent world models train behaviors entirely in imagination~\citep{hafner2020dream}, and learned models combine with terminal value functions for planning~\citep{hansen2022temporal}; on physical robots, neural dynamics models have driven locomotion and navigation directly~\citep{nagabandi2018neural}.
+All of these model the environment at the \emph{action} level so that a policy or planner can be built on top.
+VGFC inverts the arrangement: the policy already exists and is competent, so what is modeled is the short-horizon response of the \emph{closed loop}, policy included, to its 3-D command input.
+This collapses the input dimensionality at the interface, makes inversion by enumeration trivial, and confines the search space to ``commands the policy understands'' rather than raw torques.
+
+\textbf{MPC in robotics and vehicles.}
+Model predictive control optimizes a model-based cost over a receding horizon under constraints~\citep{mayne2000constrained}, and is a workhorse of both vehicle and legged control: predictive steering on slippery roads~\citep{falcone2007predictive}, sampling-based path-integral control for aggressive autonomous driving~\citep{williams2018information}, learned-dynamics MPC for autonomous racing~\citep{kabzan2019learning}, and convex MPC for quadruped locomotion~\citep{dicarlo2018dynamic}; learning-based MPC with safety guarantees is a field of its own~\citep{hewing2020learning}.
+VGFC can be read as the smallest useful member of this family: a sampling-based, single-interval MPC whose ``dynamics'' are an identified closed-loop response, whose decision variable is one velocity command rather than an action sequence, and whose constraint handling is a veto gate with a guaranteed fallback instead of constrained optimization.
+The simplification is deliberate: the low-level policy already solves the hard receding-horizon problem at the contact timescale, so the compensator only needs to choose \emph{which} well-understood command to issue next.
+
+\textbf{Reference governors and safety filters.}
+The structure of VGFC has a precise control-theoretic ancestor: the reference governor, an add-on scheme that monitors and minimally modifies the reference of a pre-stabilized closed loop to enforce constraints~\citep{garone2017reference}, and its learning-era descendant, the predictive safety filter, which certifies or corrects a proposed input by model prediction~\citep{wabersich2021predictive}.
+VGFC can be read as a \emph{learned, cost-optimizing} governor: where governors modify the reference only as much as constraint enforcement demands, VGFC additionally optimizes a running cost (energy) at matched task progress, and its ``model'' is identified from rollouts rather than derived, trading the governors' invariance guarantees for applicability to policies whose dynamics exist only as a network.
+Two recent robot-learning systems are the nearest neighbors.
+ABS~\citep{he2024agile} searches twist commands against a learned reach-avoid value to keep an agile quadruped policy collision-free; its objective is safety, and its value network and policies are co-trained as one framework, whereas VGFC attaches to an unmodified, off-the-shelf policy and optimizes efficiency subject to safety.
+\citet{kim2024koopman} identify linear Koopman dynamics of an RL-controlled biped, policy in the loop, for MPC-based safe navigation; VGFC likewise identifies the closed loop at the command level, but with an observation-conditioned nonlinear model whose terrain-dependent energy and posture channels have no linear lifted-state analogue, and uses it for compensation rather than navigation.
+To our knowledge, the combination VGFC instantiates---post-hoc identification of a frozen policy's situational command response, running-cost optimization at matched predicted progress, and a learned predictive viability gate behind a bounded correction---has not been reported, though each mechanism, as this section shows, has clear ancestors.
 
 \textbf{Options, skills, and behavior archives.}
 Temporal-abstraction research builds libraries of reusable behaviors: options~\citep{sutton1999options,bacon2017option}, unsupervised skills~\citep{eysenbach2019diversity,sharma2020dynamics}, skill priors from offline data~\citep{pertsch2020spirl,ajay2021opal}, large-scale skill embeddings~\citep{peng2022ase}, and quality-diversity repertoires used for rapid adaptation~\citep{mouret2015illuminating,cully2015robots,pugh2016quality}.
+DADS~\citep{sharma2020dynamics} is notable here for planning over learned skill-transition models, but those models are co-trained with the skills they describe; VGFC instead identifies the response of an already-trained task policy it had no part in shaping.
 Our retrieval-based variant (Section~\ref{sec:retrieval}) is squarely in this tradition: an online archive of behavior chunks with body-frame outcome descriptors, reused as gated command residuals.
 Our experiments position it as a partial solution: it inherits the archive's coverage limits, whereas the response model interpolates over the whole command box.
 Hierarchical RL layers goal-conditioned controllers~\citep{nachum2018data}; recent imitation methods execute action chunks closed-loop~\citep{zhao2023learning}.
 We show raw chunk replay destabilizes contact-rich locomotion, motivating compensation at the command interface instead.
 
-\textbf{Residual control.}
-Residual policy learning adds a learned corrective action on top of a base controller~\citep{silver2018residual,johannink2019residual}.
-VGFC is residual in \emph{command} space rather than action space, and its correction is not trained by gradient descent against task reward; it is computed by inverting an identified response model, which requires no additional environment interaction beyond the identification data.
-
-\textbf{Command-conditioned control policies.}
-Massively parallel training yields robust velocity-tracking policies~\citep{rudin2022learning,makoviychuk2021isaac,mittal2023orbit,schwarke2025rslrl} that transfer to harsh terrain~\citep{lee2020learning,miki2022learning}, adapt online~\citep{kumar2021rma}, and expose behavioral diversity through command interfaces~\citep{margolis2022walk}.
-These works improve the policy during training; VGFC is complementary and operates on the frozen result, exploiting exactly the command-conditioning these policies already expose.
+\textbf{Improving a pretrained policy without retraining it.}
+Residual policy learning adds a learned action-space correction on top of a base controller~\citep{silver2018residual,johannink2019residual}; it improves the base but requires reward access and further environment interaction, and its correction shares authority at the contact-critical timescale.
+RMA adapts a policy online through a latent extrinsics estimate~\citep{kumar2021rma}, and multiplicity-of-behavior training exposes a space of gaits through the command interface~\citep{margolis2022walk}; both must be built in at training time.
+Massively parallel pipelines~\citep{rudin2022learning,makoviychuk2021isaac,mittal2023orbit,schwarke2025rslrl} and terrain curricula~\citep{lee2020learning,miki2022learning} improve the policy during training.
+VGFC occupies the remaining cell of this matrix: it is attached after training, learns nothing by reinforcement, touches only the command interface the policy already exposes, and computes its correction by inverting an identified model, so the worst case of a poor correction is inefficiency rather than a fall.
 
 \section{Method}
 \label{sec:method}
@@ -118,7 +131,14 @@ The resulting architecture has three parts, presented in the next three subsecti
 \label{sec:setting}
 
 Let $\pi_\theta$ be a frozen, pretrained continuous-control policy mapping observations $o_t$ and a command $c$ to low-level actions.
-In our locomotion instantiation $c = (v_x, v_y, \omega_z)$ is the body-frame velocity command, but the framework only requires \emph{some} command interface through which behavior can be steered, a property shared by most modern learned continuous-control policies~\citep{margolis2022walk,kumar2021rma}.
+In our locomotion instantiation $c = (v_x, v_y, \omega_z)$ is the body-frame velocity command, but the framework only requires \emph{some} command interface through which behavior can be steered, a property shared by learned controllers that are deployed as task-level building blocks~\citep{margolis2022walk,kumar2021rma}.
+
+\textbf{Scope.}
+Three properties of the policy, not of robots, delimit where the framework applies.
+\emph{(i) A command interface must exist}: a single-task policy trained without conditioning exposes nothing to invert over, so VGFC does not apply to unconditioned RL policies (a limitation shared by every command-level method).
+\emph{(ii) The interface must carry redundancy}: compensation exploits slack, i.e., several commands making comparable task progress at different cost; a task that pins the command leaves nothing to save.
+\emph{(iii) The closed loop must respond at a fast, roughly stationary timescale}: command consequences must be visible within a short prediction window, which holds when the policy stabilizes its plant (locomotion, end-effector servoing, vehicle velocity/curvature tracking) and fails for sparse, long-horizon credit-assignment problems.
+These conditions characterize command-conditioned continuous control broadly, from legged robots to vehicle controllers, rather than reinforcement learning in general; Section~\ref{sec:limitations} returns to what lies outside them.
 
 Why intervene at the command rather than at the action, as residual policy learning does~\citep{silver2018residual,johannink2019residual}?
 Three reasons, mirroring the three requirements.
@@ -150,7 +170,8 @@ Crucially, \emph{no quality filtering is applied}: stumbles, slips, and low-post
 This is the same self-distillation data source that populates our behavior archive (Section~\ref{sec:retrieval}); the difference is what is extracted from it.
 
 \textbf{Response targets.}
-From constant-command windows of $H{=}16$ low-level steps we regress six outcomes: body-frame displacement $(\Delta x, \Delta y)$, yaw change $\Delta\psi$, per-step energy $\bar{e} = \operatorname{mean}(\lvert a_t \odot \dot{q}_t \rvert)$, and the minimum and mean of \emph{terrain-relative posture height} over the window.
+The outputs instantiate a general three-channel schema that any instantiation of the framework must fill: a \emph{progress} statistic sufficient to score task advancement, the \emph{cost} being minimized, and the \emph{viability} quantity the gate guards.
+For locomotion, from constant-command windows of $H{=}16$ low-level steps we regress six outcomes: body-frame displacement $(\Delta x, \Delta y)$ and yaw change $\Delta\psi$ (progress), per-step energy $\bar{e} = \operatorname{mean}(\lvert a_t \odot \dot{q}_t \rvert)$ (cost), and the minimum and mean of \emph{terrain-relative posture height} over the window (viability); a manipulation instantiation would substitute end-effector displacement, actuation effort, and a grasp-stability or joint-limit margin, and a vehicle instantiation path progress, consumption, and a slip margin.
 The horizon is four replanning intervals ($E{=}4$ low-level steps per high-level decision, $80$\,ms at the $50$\,Hz control rate): long enough to span a stride and expose gait-level energy and posture differences between commands, short enough that a single-step prediction from the current observation remains accurate.
 Posture height is recovered from the policy's own height-scan observation (mean scan return plus sensor offset), not from world coordinates.
 This choice matters: on procedurally rough terrain, world-frame base height confounds posture with ground elevation, and a model trained on world-frame labels reaches only $R^2 = 0.25$ on minimum height; the terrain-relative labels raise this to $R^2 = 0.88$ (Table~\ref{tab:model}).
@@ -516,7 +537,9 @@ Two further design choices are supported by earlier evidence at scale.
 \label{sec:limitations}
 
 \textbf{Scope.}
-All results are in simulation, on target reaching, with velocity-commanded locomotion policies across three embodiments; the framework itself only assumes a continuous-control policy with a command interface, and extending the evaluation to other continuous-control settings (end-effector-commanded manipulation, style-commanded character control~\citep{peng2022ase}) is the most direct test of that generality.
+All results are in simulation, on target reaching, with velocity-commanded locomotion policies across three embodiments.
+The framework's assumptions (Section~\ref{sec:setting}) characterize command-conditioned continuous control, not reinforcement learning in general: an unconditioned single-task policy exposes no interface to invert over, a task without command redundancy leaves nothing to save, and sparse long-horizon problems hide command consequences from any short-window response model.
+Within those bounds, the untested breadth is real: end-effector-commanded manipulation and style-commanded character control~\citep{peng2022ase} fill the progress/cost/viability schema of Section~\ref{sec:model} naturally and are the most direct test of generality; for unconditioned policies, distilling a command-conditioned interface first (and then compensating it) is an open path.
 The recipe requires per-robot identification (four minutes of simulation and minutes of training per robot); ANYmal-D shows that identification is the \emph{only} per-robot component, but it remains a component.
 Hardware transfer, where energy savings matter most, is the natural next step; the identification recipe applies unchanged wherever the policy can be safely excited.
 
