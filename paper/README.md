@@ -28,9 +28,13 @@ Every number in the paper was verified against raw result files (paths relative 
 | --- | --- |
 | Table 1 (Go2 response model) | `outputs/response_model/go2_command_response_model_summary.json`; world-frame row from the earlier world-z model run (recorded in the session logs; reproducible via `collect_response_dataset.py` without the relative-height patch) |
 | §4.3 aggregate + per-target table (8 targets, n=400) | `outputs/isaac_go2_rough_rsl_rl_skills_long/ff_v4_harder8_summary.json` (inputs: `ff_v4_harder8_10trials_seed70{1..5}_positions.json`) |
-| Fig. 1 (paired per-seed differences) | computed from `ff_v4_*` records across all families (session script `make_paired_figure.py`) |
+| Fig. 1 (method schematic) | hand-drawn via session script `make_method_figure.py` (no data) |
+| Fig. 2 (paired per-seed differences) | computed from `ff_v4_*` records across all families (session script `make_paired_figure.py`) |
 | Figs. 2-3 (trajectories, control example) | `ff_v4_harder8_10trials_seed701/704_positions.json` (example: seed 704, trial 9, target (2,0)) |
-| Coverage table (moderate/holdout/ANYmal/H1) | `ff_v4_moderate_summary.json`, `ff_v4_holdout_summary.json` (Go2 dir); `outputs/isaac_anymal_rough_ff/ff_v4_anymal_summary.json`; `outputs/isaac_h1_rough_rsl_rl_skills/ff_v4_h1_summary.json` |
+| Coverage table: Go2 moderate/holdout | `ff_v4_moderate_summary.json`, `ff_v4_holdout_summary.json` (Go2 dir) |
+| Coverage table: ANYmal-D (8 targets) | `outputs/isaac_anymal_rough_ff/ff_v4_anymal_summary.json` |
+| Coverage table: H1 (8 targets, −4.7%) | `outputs/isaac_h1_rough_rsl_rl_skills/ff_v7_h1solved_summary.json` (inputs: `ff_v7_h1solved_5trials_seed90{1..3}_positions.json`; config: energy margin 0.10 as Go2, posture floors tightened for humanoid: `--ff_min_height_fraction 0.93 --ff_rescue_height_fraction 0.90 --ff_current_height_fraction 0.96 --ff_max_height_drop 0.008`) |
+| H1 failure-mode diagnostic (loose quadruped gate → posture collapse) | `ff_v6_h1harder8_m10_5trials_seed90{1..3}` (margin 0.10, quadruped posture floors) |
 | §4.6 VGSR multi-seed aggregate | `outputs/isaac_go2_rough_rsl_rl_skills_long/go2_harder_strengthened_40trial_summary.json` |
 | §4.6 gate ablation | `go2_harder_gate_ablation_5trial_summary.json` |
 | §4.6 archive-size ablation | `rsl_archive_ablation_arch{500,2000,full}_harder_5trials_seed106_positions.json` |
