@@ -241,7 +241,19 @@ VGCC has an offline \emph{identification} phase and an online \emph{compensation
 phase. Identification fits a command-response model to the frozen policy's own
 excitation rollouts. At deployment, VGCC compares a nominally scaled command and
 the direct command and executes the scale only when the model certifies its local
-progress, cost, and posture.
+progress, cost, and posture (Figure~\ref{fig:method}).
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{vgfc_method.png}
+\caption{VGCC overview. Offline excitation rollouts from the frozen
+policy--robot closed loop train an observation-conditioned response model.
+Online, the model scores the direct and nominally scaled commands; the
+priority-ordered gate restores or rescues posture, compensates only when the
+progress, posture, and cost criteria pass, and otherwise uses the exact direct
+fallback.}
+\label{fig:method}
+\end{figure}
 
 \textbf{Design requirements.}
 Three requirements shape every design decision that follows.
