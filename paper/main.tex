@@ -19,8 +19,8 @@
 
 \graphicspath{{figures/}}
 
-\title{Viability-Gated Feedforward Compensation of Learned Continuous-Control Policies}
-\renewcommand{\shorttitle}{Viability-Gated Feedforward Compensation}
+\title{Viability-Gated Command Compensation for Frozen Locomotion Policies}
+\renewcommand{\shorttitle}{Viability-Gated Command Compensation}
 
 \author{
   Zongtan Li \\
@@ -33,303 +33,572 @@
 \maketitle
 
 \begin{abstract}
-Learned continuous-control policies are rarely uniformly good: even a converged reinforcement-learning controller retains systematic deficiencies such as energy-inefficient command tracking, undertrained command regions, and posture degradation on long tasks.
-We study \emph{compensation}: improving a fixed learned action policy using its own behavioral experience, without retraining it.
-Borrowing the structure of classical feedforward compensation, we identify a \emph{command-response model} of the closed loop formed by the policy and its plant: a network trained on excitation rollouts of the converged policy that predicts, from the current observation and a candidate command, the short-horizon response: body-frame displacement, energy, and terrain-relative posture height.
-At deployment, \emph{Viability-Gated Feedforward Compensation} (VGFC) inverts this model over a candidate command set: it selects the lowest-predicted-energy command that preserves the direct goal command's predicted progress, subject to a predictive viability gate that rejects commands whose predicted posture height violates a safety floor, catching height collapse \emph{before} it happens rather than reacting to it.
-In Isaac Lab rough-terrain experiments on Unitree Go2, VGFC systematically improves the energy economy of the pretrained controller it compensates: across an eight-target benchmark and moderate and held-out target sets it reduces the energy proxy by $5$--$11\%$ (non-overlapping bootstrap CIs on the main benchmark, $n{=}400$ per method) while success remains statistically matched; the paired per-seed energy difference is negative on every one of 17 evaluation seeds spanning three robots (sign test $p < 10^{-5}$).
-On a second embodiment, the ANYmal-D quadruped, the identical frozen recipe transfers with no re-tuning of any parameter ($-3.9\%$ energy at matched success); on the H1 humanoid, once the posture floor is matched to the humanoid's higher center of mass, the same recipe reduces energy by $4.7\%$ at matched success.
-Component ablations confirm that each element of the design is necessary: removing the viability gate forfeits most of the realized saving, removing the bound on the correction sacrifices success for energy, and a retrieval-based variant (archived behavior chunks reused as gated command residuals) captures only part of the gains and degrades off the archive's support.
-These results indicate that a policy's own experience is most useful not as a collection of replayable behaviors, but as an inverted response model operating behind a viability gate.
+We present \textbf{Viability-Gated Command Compensation} (VGCC), a training-free
+controller that improves a frozen, command-conditioned locomotion policy without
+touching its weights, reward, or low-level feedback. A task is normally layered
+on such a policy by driving it straight at the goal with a proportional velocity
+command; this is a strong baseline, but a wasteful one, because it always
+requests the fastest local motion even where a gentler command would reach the
+goal just as well. VGCC identifies the frozen policy--robot closed loop directly
+from the command interface: an offline supervised model predicts, for any
+candidate command, the local motion it produces, its mechanical cost, and the
+terrain-relative posture it leaves the robot in. Online, VGCC compares a
+nominally efficient scaled command against the direct command and executes the
+scaled one only when the model certifies that it preserves task progress and
+posture at lower cost per unit progress; otherwise it falls back to the direct
+command \emph{exactly}. The learned viability gate and exact fallback are what
+let a single configuration transfer across the command space and across
+embodiments, including a humanoid on which an ungated fixed command scale
+collapses posture. On Isaac Lab rough-terrain target reaching, VGCC lowers the
+optimized running cost by $4$--$10\%$ across eight command directions and three
+robots (Go2, ANYmal-D, H1) with no observed aggregate success loss, and a
+torque-derived evaluation links this to reduced simulated mechanical work and
+cost of transport. We compare against a tuned fixed command scale and a reactive
+governor as explicit baselines, report simulated mechanical quantities, and
+frame the remaining gap to a hardware electrical-energy claim explicitly.
 \end{abstract}
 
-\keywords{policy compensation \and feedforward control \and learned dynamics models \and continuous control \and legged locomotion \and skill archives}
+\keywords{policy compensation \and command-interface control \and learned dynamics models \and continuous control \and legged locomotion}
 
 \section{Introduction}
 \label{sec:intro}
 
-Learning-based continuous control has matured to the point where strong pretrained policies are commodities: massively parallel simulation trains velocity-conditioned locomotion controllers for quadrupeds and humanoids in minutes~\citep{rudin2022learning,makoviychuk2021isaac}, and such policies transfer to challenging real-world terrain~\citep{lee2020learning,miki2022learning,hwangbo2019learning}.
-Yet a converged policy is not a uniformly good policy.
-Its competence mirrors its training distribution: command tracking is energy-inefficient in regions the curriculum visited rarely; aggressive proportional commands waste effort on terrain where they mostly produce slip; and on long tasks the policy can drift into low-posture regimes it was never penalized for entering.
-The standard remedies (reward reshaping, curriculum redesign, fine-tuning) all require another pass of training, with its cost and its risk of regressing behaviors that already work.
+Strong learned locomotion policies are commonly deployed through a velocity
+command interface. The interface is attractive for post-training improvement: it
+leaves the policy's contact-level feedback intact, yet the same target can often
+be approached by commands with different speed, work, and posture consequences.
+A direct proportional command, however, always requests the fastest local
+motion. It therefore spends unnecessary effort on terrain where a slower command
+remains viable, and near the goal it produces energy-intensive in-place
+stepping. Retraining the policy or modifying its low-level actions is expensive
+and can regress useful behavior.
 
-Classical control has a name for the alternative: \emph{feedforward compensation}.
-When a plant exhibits known systematic error, one identifies a model of its response and uses the inverse of that model to pre-correct the reference signal, before feedback ever has to react~\citep{astrom2008feedback,francis1976internal}.
-This paper develops the analogous construction for learned continuous-control policies.
-The ``plant'' is the closed loop formed by the frozen policy and the robot; the ``reference'' is the high-level command the policy was trained to consume; and the ``model'' is learned from the policy's own rollouts, the same self-generated experience that skill-discovery and behavior-archive methods~\citep{eysenbach2019diversity,cully2015robots,pertsch2020spirl} would distill into replayable skills.
-Where those methods reuse experience by \emph{replaying} it (an approach we show is brittle for contact-rich control), we reuse it by \emph{identifying the system it came from}, then inverting that model at the command interface.
+We address this setting with \textbf{Viability-Gated Command Compensation}
+(VGCC). The controller makes one deliberately narrow decision at every high-level
+step: apply a nominally efficient scale of the direct command, or retain direct
+control. To make that decision it first identifies the short-horizon command
+response of the frozen policy and robot from excitation rollouts. The scaled
+command is accepted only when the model predicts that posture stays viable and
+progress stays close to direct control at lower cost; otherwise VGCC executes the
+unmodified direct command. This turns command shaping from an unconditional
+heuristic into a model-gated controller with an exact fallback.
 
-Concretely, we introduce \textbf{Viability-Gated Feedforward Compensation (VGFC)}, with three components.
-(i)~\emph{Command-response model}: we excite the converged policy with uniformly sampled velocity commands across many parallel environments, in the manner of system identification with rich excitation, and train a network that maps the current observation and a candidate command to the short-horizon closed-loop response: body-frame displacement and yaw change, per-step energy, and posture height measured \emph{relative to terrain}.
-(ii)~\emph{Feedforward inversion}: at each high-level step, VGFC evaluates a candidate command set spanning speeds, approach angles, and yaw rates, and selects the candidate with the lowest predicted energy among those that retain at least a fixed fraction of the direct goal command's predicted progress.
-(iii)~\emph{Predictive viability gating}: candidates whose predicted minimum posture height violates a safety floor are rejected \emph{before execution}; if the direct command itself is predicted to violate the floor, VGFC switches to a rescue mode that maximizes predicted posture height; and if measured posture has already sagged, compensation is suspended so the policy's aggressive tracking can restore it.
-The learned policy remains the safe default in every branch: compensation degrades to inaction, never to open-loop behavior.
-
-We instantiate VGFC on legged locomotion, the domain where feedback sensitivity makes naive skill reuse fail most sharply, using Isaac Lab rough-terrain target reaching with three embodiments: the Unitree Go2 and ANYmal-D quadrupeds and the H1 humanoid, with the public pretrained RSL-RL checkpoints as the compensated policies and as the baselines.
-Across the Go2 task families (an eight-target benchmark plus moderate and held-out sets) and ANYmal-D on the same benchmark, VGFC reduces energy at statistically matched success, with the paired per-seed energy difference negative on all 17 evaluation seeds; on ANYmal-D the shared quadruped configuration transfers with zero re-tuning. On the H1 humanoid, the same recipe reduces energy once its posture floor is matched to the humanoid's higher center of mass, the one gate parameter that reflects morphology.
-We additionally report component ablations that map the failure modes of naive model inversion (without the viability gate, predicted savings fail to materialize in the closed loop; without the bounded correction, the compensator trades success for energy) and an extensive study of the \emph{retrieval-based} alternative (archived chunks converted to gated command residuals, the natural evolution of skill-archive methods), which captures a smaller energy improvement and degrades off the archive's support.
-The ablations establish that the viability gate is the component on which the method's reliability depends.
+The restriction to a small, deliberately structured candidate set is what makes
+the method both cheap and safe, and it is the outcome of a specific design
+critique. A fixed command scale is the obvious efficiency heuristic, and on a
+single robot a well-tuned scale is a strong baseline; but it is open-loop. It
+slows the robot everywhere, pays a large completion-time penalty, must be
+re-tuned per robot, and---as we show on a humanoid---can drive a tall, high-inertia
+body into posture collapse on exactly the long targets where slowing down looks
+most attractive. VGCC keeps the efficiency of scaling where it is safe and
+reverts to the strong direct baseline where it is not, using a learned model to
+tell the two situations apart. Three design choices make this precise and
+distinguish VGCC from a naive scaling heuristic: it scores the command that will
+\emph{actually} be executed rather than an idealized candidate; it optimizes a
+cost-per-progress objective so that slowing down is only rewarded when it does
+not simply trade energy for time; and it gates on terrain-relative posture rather
+than raw command magnitude.
 
 \textbf{Contributions.}
-(1)~A \emph{feedforward-compensation framing} for improving fixed learned continuous-control policies: identify the closed-loop command response from self-generated excitation data, then invert it at the command interface at deployment, with no retraining and no action-space intervention (Sections~\ref{sec:model}--\ref{sec:vgfc}).
-(2)~A \emph{predictive viability gate} built on terrain-relative posture prediction, which anticipates height collapse before residual execution; we show terrain-relative labels are essential, raising posture-prediction $R^2$ from $0.25$ to $0.88$ over world-frame labels (Section~\ref{sec:model}).
-(3)~A systematic empirical study on Go2, ANYmal-D, and H1 rough terrain, with multiple seeds, tuning/evaluation seed separation, paired per-seed statistics, per-target analysis, and control examples, showing seed-consistent energy reductions at statistically matched success on every task family, including zero-re-tuning transfer to ANYmal-D (Section~\ref{sec:results}).
-(4)~Component ablations of the compensator itself and a characterization of the \emph{retrieval-based alternative} (viability-gated skill residuals from a quality-diversity-style archive), delineating why compensation needs a model, a constraint, a gate, and a bounded correction, and what each contributes (Sections~\ref{sec:results-retrieval},~\ref{sec:ablation-vgfc}).
+(1)~VGCC, a training-free command controller that combines a nominally efficient
+command scale with predictive progress and posture gating and an exact direct
+fallback, so that a single configuration is safe to deploy across the command
+space and across embodiments.
+(2)~An execution-aligned command-response model that predicts, for the command
+actually sent to the frozen policy, its local motion, terrain-relative posture,
+and a torque-derived mechanical cost.
+(3)~An evaluation across three embodiments and four command families that reports
+the optimized running cost together with torque-derived mechanical work,
+cost of transport, completion time, and success, against direct control, a tuned
+fixed command scale, and a reactive governor, with tuning and confirmation seeds
+separated in advance.
 
 \section{Related Work}
 \label{sec:related}
 
-\textbf{Feedforward and internal-model control.}
-Feedforward compensation pre-corrects a reference using a plant model, leaving feedback to handle residual error~\citep{astrom2008feedback}; the internal model principle formalizes why regulation requires a model of the signals to be tracked or rejected~\citep{francis1976internal}.
-VGFC transports this structure to learned policies: the ``plant'' is the policy-robot closed loop, the model is a learned network, and inversion is a discrete search over the command set.
-The novelty is not the control-theoretic template but its instantiation on top of a frozen RL policy, with the model identified from the policy's own rollouts.
+\textbf{Feedforward and internal model control.}
+Feedforward compensation precorrects a reference using a plant model, leaving
+feedback to handle residual error~\citep{astrom2008feedback}; the internal model
+principle formalizes why regulation requires a model of the signals to be tracked
+or rejected~\citep{francis1976internal}.
+VGCC transports this structure to learned policies: the ``plant'' is the
+policy--robot closed loop, the model is a learned network, and inversion is a
+discrete comparison over a small command set.
+The novelty is not the control-theoretic template but its instantiation on top of
+a frozen RL policy, with the model identified from the policy's own rollouts.
 
 \textbf{Model-based RL.}
-Learning a dynamics model and exploiting it for control is one of the oldest programs in RL: Gaussian-process models enable data-efficient policy search~\citep{deisenroth2011pilco}, probabilistic neural ensembles support sampling-based planning within a handful of trials~\citep{chua2018deep}, short model-generated rollouts accelerate policy optimization~\citep{janner2019trust}, latent world models train behaviors entirely in imagination~\citep{hafner2020dream}, and learned models combine with terminal value functions for planning~\citep{hansen2022temporal}; on physical robots, neural dynamics models have driven locomotion and navigation directly~\citep{nagabandi2018neural}.
-All of these model the environment at the \emph{action} level so that a policy or planner can be built on top.
-VGFC inverts the arrangement: the policy already exists and is competent, so what is modeled is the short-horizon response of the \emph{closed loop}, policy included, to its 3-D command input.
-This collapses the input dimensionality at the interface, makes inversion by enumeration trivial, and confines the search space to ``commands the policy understands'' rather than raw torques.
+Learning a dynamics model and exploiting it for control is one of the oldest
+programs in RL: Gaussian process models enable data-efficient policy
+search~\citep{deisenroth2011pilco}, probabilistic neural ensembles support
+sampling-based planning within a handful of trials~\citep{chua2018deep}, short
+model-generated rollouts accelerate policy optimization~\citep{janner2019trust},
+latent world models train behaviors entirely in
+imagination~\citep{hafner2020dream}, and learned models combine with terminal
+value functions for planning~\citep{hansen2022temporal}; on physical robots,
+neural dynamics models have driven locomotion and navigation
+directly~\citep{nagabandi2018neural}.
+All of these model the environment at the \emph{action} level so that a policy or
+planner can be built on top.
+VGCC inverts the arrangement: the policy already exists and is competent, so what
+is modeled is the short-horizon response of the \emph{closed loop}, policy
+included, to its 3-D command input.
+This collapses the input dimensionality at the interface, makes inversion by
+enumeration trivial, and confines the decision to ``commands the policy
+understands'' rather than raw torques.
 
 \textbf{MPC in robotics and vehicles.}
-Model predictive control optimizes a model-based cost over a receding horizon under constraints~\citep{mayne2000constrained}, and is widely used in both vehicle and legged control: predictive steering on slippery roads~\citep{falcone2007predictive}, sampling-based path-integral control for aggressive autonomous driving~\citep{williams2018information}, learned-dynamics MPC for autonomous racing~\citep{kabzan2019learning}, and convex MPC for quadruped locomotion~\citep{dicarlo2018dynamic}; and learning-based MPC with safety guarantees constitutes an active research area in its own right~\citep{hewing2020learning}.
-VGFC can be read as the smallest useful member of this family: a sampling-based, single-interval MPC whose ``dynamics'' are an identified closed-loop response, whose decision variable is one velocity command rather than an action sequence, and whose constraint handling is a veto gate with a guaranteed fallback instead of constrained optimization.
-The simplification is deliberate: the low-level policy already solves the hard receding-horizon problem at the contact timescale, so the compensator only needs to choose \emph{which} well-understood command to issue next.
+Model predictive control optimizes a model-based cost over a receding horizon
+under constraints~\citep{mayne2000constrained}, and is widely used in both
+vehicle and legged control: predictive steering on slippery
+roads~\citep{falcone2007predictive}, sampling-based path-integral control for
+aggressive autonomous driving~\citep{williams2018information}, learned-dynamics
+MPC for autonomous racing~\citep{kabzan2019learning}, and convex MPC for
+quadruped locomotion~\citep{dicarlo2018dynamic}; and learning-based MPC with
+safety guarantees is an active research area in its own
+right~\citep{hewing2020learning}.
+VGCC can be read as the smallest useful member of this family: a single-interval
+decision whose ``dynamics'' are an identified closed-loop response, whose decision
+variable is one velocity command rather than an action sequence, and whose
+constraint handling is a veto gate with a guaranteed fallback instead of
+constrained optimization.
+The simplification is deliberate: the low-level policy already solves the hard
+receding-horizon problem at the contact timescale, so the compensator only needs
+to choose \emph{which} well-understood command to issue next.
 
 \textbf{Reference governors and safety filters.}
-The structure of VGFC has a precise control-theoretic ancestor: the reference governor, an add-on scheme that monitors and minimally modifies the reference of a pre-stabilized closed loop to enforce constraints~\citep{garone2017reference}, and its learning-era descendant, the predictive safety filter, which certifies or corrects a proposed input by model prediction~\citep{wabersich2021predictive}.
-VGFC can be read as a \emph{learned, cost-optimizing} governor: where governors modify the reference only as much as constraint enforcement demands, VGFC additionally optimizes a running cost (energy) at matched task progress, and its ``model'' is identified from rollouts rather than derived, trading the governors' invariance guarantees for applicability to policies whose dynamics exist only as a network.
+The structure of VGCC has a precise control-theoretic ancestor: the reference
+governor, an add-on scheme that monitors and minimally modifies the reference of
+a prestabilized closed loop to enforce constraints~\citep{garone2017reference},
+and its learning-era descendant, the predictive safety filter, which certifies or
+corrects a proposed input by model prediction~\citep{wabersich2021predictive}.
+VGCC can be read as a \emph{learned, cost-optimizing} governor: where governors
+modify the reference only as much as constraint enforcement demands, VGCC
+additionally optimizes a running cost at matched task progress, and its ``model''
+is identified from rollouts rather than derived, trading the governors' invariance
+guarantees for applicability to policies whose dynamics exist only as a network.
 Two recent robot-learning systems are the most closely related.
-ABS~\citep{he2024agile} searches twist commands against a learned reach-avoid value to keep an agile quadruped policy collision-free; its objective is safety, and its value network and policies are co-trained as one framework, whereas VGFC attaches to an unmodified pretrained policy and optimizes efficiency subject to safety.
-\citet{kim2024koopman} identify linear Koopman dynamics of an RL-controlled biped, policy in the loop, for MPC-based safe navigation; VGFC likewise identifies the closed loop at the command level, but with an observation-conditioned nonlinear model whose terrain-dependent energy and posture channels have no linear lifted-state analogue, and uses it for compensation rather than navigation.
-To our knowledge, the specific combination that VGFC instantiates, namely post-hoc identification of a frozen policy's situational command response, running-cost optimization at matched predicted progress, and a learned predictive viability gate behind a bounded correction, has not previously been reported, although each constituent mechanism, as this section documents, has established antecedents.
+ABS~\citep{he2024agile} searches twist commands against a learned reach-avoid
+value to keep an agile quadruped policy collision-free; its objective is safety,
+and its value network and policy are co-trained as one framework, whereas VGCC
+attaches to an unmodified pretrained policy and optimizes efficiency subject to
+safety.
+\citet{kim2024koopman} identify linear Koopman dynamics of an RL-controlled biped,
+policy in the loop, for MPC-based safe navigation; VGCC likewise identifies the
+closed loop at the command level, but with an observation-conditioned nonlinear
+model whose terrain-dependent cost and posture channels have no linear
+lifted-state analogue, and uses it for compensation rather than navigation.
+To our knowledge, the specific combination that VGCC instantiates---post-hoc
+identification of a frozen policy's situational command response, running-cost
+optimization at matched predicted progress, and a learned predictive viability
+gate behind a bounded correction with exact fallback---has not previously been
+reported, although each constituent mechanism has established antecedents.
 
 \textbf{Options, skills, and behavior archives.}
-Temporal-abstraction research builds libraries of reusable behaviors: options~\citep{sutton1999options,bacon2017option}, unsupervised skills~\citep{eysenbach2019diversity,sharma2020dynamics}, skill priors from offline data~\citep{pertsch2020spirl,ajay2021opal}, large-scale skill embeddings~\citep{peng2022ase}, and quality-diversity repertoires used for rapid adaptation~\citep{mouret2015illuminating,cully2015robots,pugh2016quality}.
-DADS~\citep{sharma2020dynamics} is notable here for planning over learned skill-transition models, but those models are co-trained with the skills they describe; VGFC instead identifies the response of an already-trained task policy it had no part in shaping.
-Our retrieval-based variant (Section~\ref{sec:retrieval}) is squarely in this tradition: an online archive of behavior chunks with body-frame outcome descriptors, reused as gated command residuals.
-Our experiments characterize it as a partial solution: it inherits the coverage limits of the archive, whereas the response model interpolates over the entire command space.
-Hierarchical RL layers goal-conditioned controllers~\citep{nachum2018data}; recent imitation methods execute action chunks closed-loop~\citep{zhao2023learning}.
-We show raw chunk replay destabilizes contact-rich locomotion, motivating compensation at the command interface instead.
+Temporal-abstraction research builds libraries of reusable behaviors:
+options~\citep{sutton1999options,bacon2017option}, unsupervised
+skills~\citep{eysenbach2019diversity,sharma2020dynamics}, skill priors from
+offline data~\citep{pertsch2020spirl,ajay2021opal}, large-scale skill
+embeddings~\citep{peng2022ase}, and quality-diversity repertoires used for rapid
+adaptation~\citep{mouret2015illuminating,cully2015robots,pugh2016quality}.
+DADS~\citep{sharma2020dynamics} is notable here for planning over learned skill
+transition models, but those models are co-trained with the skills they describe;
+VGCC instead identifies the response of an already-trained task policy it had no
+part in shaping.
+A retrieval-based variant (Appendix~\ref{app:retrieval}) reuses an online archive
+of behavior chunks as gated command residuals; our experiments characterize it as
+a partial solution that inherits the coverage limits of the archive, whereas the
+parametric response model interpolates over the entire command space.
+Hierarchical RL layers goal-conditioned controllers~\citep{nachum2018data}, and
+recent imitation methods execute action chunks closed loop~\citep{zhao2023learning};
+we find raw chunk replay destabilizes contact-rich locomotion, which motivates
+compensation at the command interface instead.
 
 \textbf{Improving a pretrained policy without retraining it.}
-Residual policy learning adds a learned action-space correction on top of a base controller~\citep{silver2018residual,johannink2019residual}; it improves the base but requires reward access and further environment interaction, and its correction shares authority at the contact-critical timescale.
-RMA adapts a policy online through a latent extrinsics estimate~\citep{kumar2021rma}, and multiplicity-of-behavior training exposes a space of gaits through the command interface~\citep{margolis2022walk}; both must be built in at training time.
-Massively parallel pipelines~\citep{rudin2022learning,makoviychuk2021isaac,mittal2023orbit,schwarke2025rslrl} and terrain curricula~\citep{lee2020learning,miki2022learning} improve the policy during training.
-VGFC occupies the remaining cell of this matrix: it is attached after training, learns nothing by reinforcement, touches only the command interface the policy already exposes, and computes its correction by inverting an identified model, so the worst-case consequence of a poor correction is inefficiency rather than loss of balance.
+Residual policy learning adds a learned action-space correction on top of a base
+controller~\citep{silver2018residual,johannink2019residual}; it improves the base
+but requires reward access and further environment interaction, and its
+correction shares authority at the contact-critical timescale.
+RMA adapts a policy online through a latent extrinsics
+estimate~\citep{kumar2021rma}, and multiplicity-of-behavior training exposes a
+space of gaits through the command interface~\citep{margolis2022walk}; both must
+be built in at training time.
+Massively parallel pipelines~\citep{rudin2022learning,makoviychuk2021isaac,mittal2023orbit,schwarke2025rslrl}
+and terrain curricula~\citep{lee2020learning,miki2022learning} improve the policy
+during training.
+VGCC occupies the remaining cell of this matrix: it is attached after training,
+learns nothing by reinforcement, touches only the command interface the policy
+already exposes, and computes its correction by inverting an identified model.
+Command-level intervention preserves the base policy's low-level feedback
+structure, but it does not by itself guarantee balance: a poor command can still
+induce posture loss, which is precisely what the viability gate and bounded
+correction exist to prevent.
 
 \section{Method}
 \label{sec:method}
 
-\begin{figure}[t]
-\centering
-\includegraphics[width=\linewidth]{vgfc_method.png}
-\caption{Overview of VGFC. \emph{Identification} (top, once and offline): the frozen policy is excited with random commands in closed loop with the robot, and a network $f_\phi$ regresses the short-horizon closed-loop response (body-frame motion, energy, and terrain-relative posture height) of each command. \emph{Deployment} (bottom, at each high-level step): the task target yields a proportional direct command $c_{\text{goal}}$; VGFC enumerates a candidate set around it, predicts each candidate's consequences with $f_\phi$, selects by viability-gated inversion the lowest-energy candidate that is progress-preserving and posture-safe, and applies the choice as a bounded correction $c$ that the frozen policy $\pi_\theta$ executes. The identified model conditions on the current observation, so the same command is scored differently across terrain and gait states.}
-\label{fig:method}
-\end{figure}
-
-Figure~\ref{fig:method} summarizes the method.
-VGFC has two phases: an offline \emph{identification} phase that fits a command-response model to the frozen policy's own excitation rollouts, and an online \emph{compensation} phase that, at each high-level step, enumerates candidate commands, predicts their consequences with that model, and applies a viability-gated, bounded correction to the task command before the frozen policy executes it.
-The remainder of this section derives each component from a small set of design requirements.
+VGCC has an offline \emph{identification} phase and an online \emph{compensation}
+phase. Identification fits a command-response model to the frozen policy's own
+excitation rollouts. At deployment, VGCC compares a nominally scaled command and
+the direct command and executes the scale only when the model certifies its local
+progress, cost, and posture.
 
 \textbf{Design requirements.}
 Three requirements shape every design decision that follows.
-\emph{R1, no retraining}: the compensator must improve a policy whose weights, reward, and training pipeline are unavailable or too expensive to touch; it may only observe the policy acting.
-\emph{R2, non-degradation}: the pretrained policy is already strong, so the compensator must be able to revert to it exactly, and every intervention must be rejected when its predicted benefit is uncertain.
-\emph{R3, embodiment generality}: nothing in the method may depend on robot-specific knowledge beyond what can be identified automatically from the policy's own rollouts.
-The resulting architecture has three parts, presented in the next three subsections: a compensation \emph{interface} (where to intervene, Section~\ref{sec:setting}), a response \emph{model} (what to know, Section~\ref{sec:model}), and a gated \emph{inversion} rule (how to act, Section~\ref{sec:vgfc}).
+\emph{R1, no retraining}: the compensator must improve a policy whose weights,
+reward, and training pipeline are unavailable or too expensive to touch; it may
+only observe the policy acting.
+\emph{R2, non-degradation}: the pretrained policy is already strong, so the
+compensator must be able to revert to it exactly, and every intervention must be
+rejected when its predicted benefit is uncertain.
+\emph{R3, embodiment generality}: nothing in the method may depend on
+robot-specific knowledge beyond what can be identified automatically from the
+policy's own rollouts.
+The architecture has a command interface (where to intervene,
+Section~\ref{sec:setting}), a response model (what to know,
+Section~\ref{sec:model}), and a viability gate (how to act,
+Section~\ref{sec:vgcc}).
 
 \subsection{Compensation Interface}
 \label{sec:setting}
 
-Let $\pi_\theta$ be a frozen, pretrained continuous-control policy mapping observations $o_t$ and a command $c$ to low-level actions.
-In our locomotion instantiation $c = (v_x, v_y, \omega_z)$ is the body-frame velocity command, but the framework only requires \emph{some} command interface through which behavior can be steered, a property shared by learned controllers that are deployed as task-level building blocks~\citep{margolis2022walk,kumar2021rma}.
+Let $\pi_\theta$ be a frozen, pretrained continuous-control policy mapping
+observations $o_t$ and a command $c$ to low-level actions.
+In our locomotion instantiation $c = (v_x, v_y, \omega_z)$ is the body-frame
+velocity command, but the framework only requires \emph{some} command interface
+through which behavior can be steered, a property shared by learned controllers
+deployed as task-level building blocks~\citep{margolis2022walk,kumar2021rma}.
 
 \textbf{Scope.}
-Three properties of the policy, not of robots, delimit where the framework applies.
-\emph{(i) A command interface must exist}: a single-task policy trained without conditioning exposes nothing to invert over, so VGFC does not apply to unconditioned RL policies (a limitation shared by every command-level method).
-\emph{(ii) The interface must carry redundancy}: compensation exploits redundancy, that is, the existence of several commands that make comparable task progress at different cost; a task that fully determines the command admits no efficiency gain.
-\emph{(iii) The closed loop must respond at a fast, roughly stationary timescale}: command consequences must be visible within a short prediction window, which holds when the policy stabilizes its plant (locomotion, end-effector servoing, vehicle velocity/curvature tracking) and fails for sparse, long-horizon credit-assignment problems.
-These conditions characterize command-conditioned continuous control broadly, from legged robots to vehicle controllers, rather than reinforcement learning in general; Section~\ref{sec:limitations} returns to what lies outside them.
+Three properties of the policy, not of robots, delimit where the framework
+applies.
+\emph{(i) A command interface must exist}: a single task policy trained without
+conditioning exposes nothing to invert over, so VGCC does not apply to
+unconditioned RL policies (a limitation shared by every command-level method).
+\emph{(ii) The interface must carry redundancy}: compensation exploits the
+existence of several commands that make comparable task progress at different
+cost; a task that fully determines the command admits no efficiency gain.
+\emph{(iii) The closed loop must respond at a fast, roughly stationary timescale}:
+command consequences must be visible within a short prediction window, which holds
+when the policy stabilizes its plant (locomotion, end-effector servoing, vehicle
+velocity/curvature tracking) and fails for sparse, long-horizon credit-assignment
+problems.
+These conditions characterize command-conditioned continuous control broadly,
+from legged robots to vehicle controllers, rather than reinforcement learning in
+general; Section~\ref{sec:limitations} returns to what lies outside them.
 
-Why intervene at the command rather than at the action, as residual policy learning does~\citep{silver2018residual,johannink2019residual}?
+Why intervene at the command rather than at the action, as residual policy
+learning does~\citep{silver2018residual,johannink2019residual}?
 Three reasons, mirroring the three requirements.
-First, action-space corrections must be \emph{learned}, and learning them requires reward access and environment interaction, violating R1; a command-space correction can instead be \emph{computed} from an identified model.
-Second, an action-space residual shares authority with the policy at the contact-critical timescale, where a wrong correction destabilizes; a command-space correction leaves $\pi_\theta$ in full control of posture, contacts, and joints, so the worst-case consequence of a poor command is inefficiency rather than loss of balance (R2).
-Third, the command interface is the one interface that command-conditioned policies share across embodiments (R3): the same three command variables steer a quadruped and a humanoid.
+First, action-space corrections must be \emph{learned}, and learning them
+requires reward access and environment interaction, violating R1; a command-space
+correction can instead be \emph{computed} from an identified model.
+Second, an action-space residual shares authority with the policy at the
+contact-critical timescale, whereas a command-space correction leaves $\pi_\theta$
+in control of posture, contacts, and joints. This reduces the intervention
+bandwidth but does not by itself guarantee stability; R2 therefore requires
+explicit fallback and posture gating.
+Third, the command interface is the one interface that command-conditioned
+policies share across embodiments (R3): the same three command variables steer a
+quadruped and a humanoid.
 
-A task supplies a target; throughout the method, $g$ denotes that target expressed in the robot's body frame at the current step, and the \emph{direct} controller computes a proportional command
+A task supplies a target; throughout the method, $g$ denotes that target expressed
+in the robot's body frame at the current step, and the \emph{direct} controller
+computes a proportional command
 \begin{equation}
-c_{\text{goal}} \;=\; \bigl(\operatorname{clip}(k_v \, x_{\text{local}}), \; \operatorname{clip}(k_v \, y_{\text{local}}), \; \operatorname{clip}(k_\psi \operatorname{atan2}(y_{\text{local}}, x_{\text{local}}))\bigr),
+c_{\text{goal}} \;=\; \bigl(\operatorname{clip}_{[-v_x^{\max},v_x^{\max}]}(k_v x_{\text{local}}),\;
+\operatorname{clip}_{[-v_y^{\max},v_y^{\max}]}(k_v y_{\text{local}}),\;
+\operatorname{clip}_{[-\omega^{\max},\omega^{\max}]}(k_\psi \operatorname{atan2}(y_{\text{local}},x_{\text{local}}))\bigr),
 \label{eq:cgoal}
 \end{equation}
-which is the uncompensated baseline: a strong pretrained policy driven straight at the goal.
-Proportional commands of this kind are the standard way tasks are layered on velocity-conditioned policies, and they carry a systematic inefficiency: far from the goal they saturate, commanding full speed regardless of whether the terrain rewards it, and near the goal they shrink, producing energy-intensive in-place stepping.
-Compensation replaces $c_{\text{goal}}$ with a corrected command at each high-level step (every $E = 4$ low-level steps).
-The design question is where the correction comes from and when it is trusted.
+which is the uncompensated baseline: a strong pretrained policy driven straight at
+the goal.
+Proportional commands of this kind are the standard way tasks are layered on
+velocity-conditioned policies, and they carry a systematic inefficiency: far from
+the goal they saturate, commanding full speed regardless of whether the terrain
+rewards it, and near the goal they shrink, producing energy-intensive in-place
+stepping.
+Compensation replaces $c_{\text{goal}}$ with a corrected command at each
+controller decision. The design question is where the correction comes from and
+when it is trusted.
 
 \subsection{Command-Response Model}
 \label{sec:model}
 
-To correct a command before executing it, the compensator must predict what any candidate command would do.
-The object to model is not the robot's action-level dynamics, as in model-based RL~\citep{nagabandi2018neural}: the policy already handles those competently, and re-modeling them would duplicate its work at far higher dimensionality.
-The relevant object is the \emph{closed loop} of policy and robot, viewed from the command interface: for the current situation, it specifies the motion, energetic cost, and postural risk that each candidate command produces.
-This reframing keeps the model input three-dimensional at the interface and makes identification a supervised problem on the policy's own rollouts, satisfying R1 and R3 simultaneously.
+To decide whether a candidate command is worth executing, the compensator must
+predict what it would do.
+The object to model is not the robot's action-level dynamics, as in model-based
+RL~\citep{nagabandi2018neural}: the policy already handles those competently, and
+re-modeling them would duplicate its work at far higher dimensionality.
+The relevant object is the \emph{closed loop} of policy and robot, viewed from the
+command interface: for the current situation, it specifies the motion, cost, and
+postural risk that each candidate command produces.
+This reframing keeps the model input three-dimensional at the interface and makes
+identification a supervised problem on the policy's own rollouts, satisfying R1
+and R3 simultaneously.
 
 \textbf{Excitation data.}
-We run the converged policy in $64$ parallel environments and override its command with excitation commands sampled uniformly from the command space (scaled down with probability $0.3$ to cover the near-goal regime), resampled every $25$ steps. This is system identification with persistent excitation, applied to the policy-robot closed loop.
-Crucially, \emph{no quality filtering is applied}: stumbles, slips, and low-posture episodes are kept, because the model must know where the policy performs poorly.
-This is the same self-distillation data source that populates our behavior archive (Section~\ref{sec:retrieval}); the difference is what is extracted from it.
+We override the converged policy with commands sampled throughout its admissible
+command space, including low-magnitude commands near the goal. This is persistent
+excitation applied to the policy--robot closed loop.
+Crucially, \emph{no quality filtering is applied}: stumbles, slips, and low-posture
+episodes are kept, because the model must know where the policy performs poorly.
+Filtering to high-quality segments is a natural shortcut and an actively harmful
+one---a model trained only on clean behavior cannot warn the gate about the sloppy
+behavior it must avoid (Section~\ref{sec:results-model}).
 
 \textbf{Response targets.}
-The outputs instantiate a general three-channel schema that any instantiation of the framework must fill: a \emph{progress} statistic sufficient to score task advancement, the \emph{cost} being minimized, and the \emph{viability} quantity the gate guards.
-For locomotion, from constant-command windows of $H{=}16$ low-level steps we regress six outcomes: body-frame displacement $(\Delta x, \Delta y)$ and yaw change $\Delta\psi$ (progress), per-step energy $\bar{e} = \operatorname{mean}(\lvert a_t \odot \dot{q}_t \rvert)$ (cost), and the minimum and mean of \emph{terrain-relative posture height} over the window (viability); a manipulation instantiation would substitute end-effector displacement, actuation effort, and a grasp-stability or joint-limit margin, and a vehicle instantiation path progress, consumption, and a slip margin.
-The horizon is four replanning intervals ($E{=}4$ low-level steps per high-level decision, $80$\,ms at the $50$\,Hz control rate): long enough to span a stride and expose gait-level energy and posture differences between commands, short enough that a single-step prediction from the current observation remains accurate.
-Posture height is recovered from the policy's own height-scan observation (mean scan return plus sensor offset), not from world coordinates.
-This choice matters: on procedurally rough terrain, world-frame base height confounds posture with ground elevation, and a model trained on world-frame labels reaches only $R^2 = 0.25$ on minimum height; the terrain-relative labels raise this to $R^2 = 0.88$ (Table~\ref{tab:model}).
-An unreliable height channel silently disables predictive gating; this label correction is what makes the viability gate work.
+The outputs instantiate a general three-channel schema that any instantiation of
+the framework must fill: a \emph{progress} statistic sufficient to score task
+advancement, the \emph{cost} being minimized, and the \emph{viability} quantity
+the gate guards.
+For locomotion, constant-command windows provide body-frame displacement
+$(\Delta x, \Delta y)$ and yaw change $\Delta\psi$ for progress; a mechanical cost
+for the objective; and minimum and mean terrain-relative posture height for
+viability.
+We use two cost channels of increasing physical fidelity. The first is a
+dimensionless \emph{actuation-effort proxy}
+$\bar{a}=\operatorname{mean}_{t,j}(|a_{t,j}\dot q_{t,j}|)$, formed from the public
+policy action $a$; because $a$ is not a measured motor torque, this proxy has no
+physical energy unit and is treated as an optimization objective, not an energy
+measurement. The second is a torque-derived mechanical power
+$\bar P=\operatorname{mean}_{t,j}(|\tau_{t,j}\dot q_{t,j}|)$, where $\tau_{t,j}$ is
+the simulator-applied joint torque; this is a simulated mechanical quantity, still
+not battery energy, but the physically meaningful channel used to audit whether
+reducing the proxy reduces mechanical work.
+A manipulation instantiation would substitute end-effector displacement, an
+appropriate actuation cost, and a grasp-stability or joint-limit margin.
+Posture height is recovered from the policy's own height-scan observation (mean
+scan return plus sensor offset), not from world coordinates. This prevents ground
+elevation from being confounded with posture; its empirical value is reported with
+the response-model results.
 
 \textbf{Model.}
 The response model is a mapping
 \begin{equation}
-f_\phi : (o_t, c) \;\longmapsto\; \bigl(\widehat{\Delta x}, \widehat{\Delta y}, \widehat{\Delta\psi}, \hat{e}, \hat{h}_{\min}, \hat{h}_{\text{mean}}\bigr),
+f_\phi : (o_t, c) \;\longmapsto\; \bigl(\widehat{\Delta x}, \widehat{\Delta y}, \widehat{\Delta\psi}, \hat C, \hat{h}_{\min}, \hat{h}_{\text{mean}}\bigr),
 \label{eq:responsemodel}
 \end{equation}
-where, here and throughout, hats mark quantities \emph{predicted} by the model and plain symbols are measured; $f_\phi$ is implemented as a two-layer MLP (256 units, dropout $0.1$) that takes the full policy observation with the command slice replaced by the candidate $c$; inputs and outputs are standardized, and training minimizes MSE with an episode-grouped train/test split so windows from one episode never straddle the split.
-Conditioning on the full observation is what makes the predictions \emph{situational}: the same candidate command is predicted to cost different energy on different terrain and from different gait states, which is precisely the information a fixed command-shaping heuristic cannot express.
-Identification is data-efficient: approximately 25k windows are obtained from roughly four minutes of parallel simulation, followed by a few minutes of training.
+where hats mark quantities \emph{predicted} by the model, plain symbols are
+measured, and $\hat C$ is the chosen cost channel. The implementation takes the
+full policy observation with its command component replaced by the candidate
+command; training and split details are reported in the experimental protocol.
+Conditioning on the full observation is what makes the predictions
+\emph{situational}: the same candidate command is predicted to cost differently on
+different terrain and from different gait states, which is precisely the
+information a fixed command-shaping heuristic cannot express.
 
-\subsection{Viability-Gated Inversion}
-\label{sec:vgfc}
+\subsection{Viability-Gated Compensation}
+\label{sec:vgcc}
 
-Given the response model, a naive compensator would select the command with the most favorable predicted outcome. Each safeguard introduced below addresses a distinct failure of this naive rule, quantified in Section~\ref{sec:ablation-vgfc}. Minimizing predicted distance-to-goal reduces the compensator to a speed maximizer, since aggressive commands are always favored over a short horizon; hence \emph{progress is treated as a constraint rather than the objective}. Minimizing energy without posture safeguards recovers the policy's true energetic optimum, a low-posture gait that fails the task; hence \emph{viability gates the objective}. Executing the optimizer's choice without attenuation concentrates all model error in the applied command; hence \emph{the correction is bounded}.
+VGCC does not search a large command set. Let $s\in(0,1)$ be a nominal scale,
+fixed after development, and let $\mathcal{C}=\{c_s=s\,c_{\text{goal}},\;c_d=c_{\text{goal}}\}$.
+A single batched forward pass predicts both responses.
 
-At each high-level step VGFC forms a candidate set $\mathcal{C}$ around the direct command: the direct command itself, scaled versions, yaw-rate perturbations, and a polar grid over approach speeds and angles with three yaw-rate levels ($\sim$70 candidates after deduplication).
-A single batched forward pass predicts each candidate's response $(\widehat{\Delta x}, \widehat{\Delta y}, \widehat{\Delta\psi}, \hat{e}, \hat{h}_{\min}, \hat{h}_{\text{mean}})$, from which predicted progress is
+\textbf{Execution-aligned scoring.}
+The compensator does not execute the raw candidate; it executes a bounded
+correction toward it, $c_{\text{exec}}=c_{\text{goal}}+\alpha\,(c_s-c_{\text{goal}})$
+for a correction gain $\alpha\in(0,1]$. VGCC therefore scores the command it will
+actually execute, evaluating $f_\phi$ at $c_{\text{exec}}$ rather than at the
+idealized $c_s$, so that the progress, cost, and posture constraints below refer
+to the realized command. This removes a scoring/execution mismatch that otherwise
+lets the gate certify a command the controller never issues.
+
+\textbf{Progress floor as a slowdown bound.}
+Predicted target progress is
 \begin{equation}
-\hat{P}(c) \;=\; \lVert g \rVert \;-\; \bigl\lVert g - (\widehat{\Delta x}(c), \widehat{\Delta y}(c)) \bigr\rVert .
+\hat{G}(c) \;=\; \lVert g \rVert \;-\; \bigl\lVert g - (\widehat{\Delta x}(c), \widehat{\Delta y}(c)) \bigr\rVert .
 \end{equation}
-Selection then proceeds in one of three modes (Algorithm~\ref{alg:vgfc}):
-
-\emph{(a) Follow (energy compensation).}
-If the direct command is predicted posture-safe, VGFC selects
+The scaled command is \emph{eligible} when it keeps most of direct control's
+progress and leaves posture viable:
 \begin{equation}
-c^\ast \;=\; \arg\min_{c \,\in\, \mathcal{C}_{\text{elig}}} \; \hat{e}(c),
-\qquad
-\mathcal{C}_{\text{elig}} = \Bigl\{ c : \hat{P}(c) \ge \beta\, \hat{P}(c_{\text{goal}}), \;\;
-\hat{h}_{\min}(c) \ge h_{\text{floor}}, \;\;
-\hat{h}_{\text{mean}}(c) \ge h_{\text{now}} - \delta \Bigr\},
-\label{eq:follow}
+\hat G(c_s)\ge\beta\,\hat G(c_d),\qquad
+\hat h_{\min}(c_s)\ge h_{\rm floor},\qquad
+\hat h_{\rm mean}(c_s)\ge h_{\rm now}-\delta.
+\label{eq:vgc-eligible}
 \end{equation}
-with progress floor $\beta = 0.9$, posture floor $h_{\text{floor}}$ a fixed fraction of nominal posture height, and height-decline tolerance $\delta = 2$\,cm.
-The compensation activates only if the predicted saving clears a relative margin, $\hat{e}(c^\ast) < (1 - \epsilon)\, \hat{e}(c_{\text{goal}})$ with $\epsilon = 0.1$; otherwise the direct command runs unmodified.
-The semantics are exactly feedforward compensation: \emph{keep the reference trajectory, remove the systematic energetic inefficiency}.
+Because the prediction horizon has a fixed duration, $\hat G(c)$ is progress
+\emph{per unit time}, so the progress floor is directly a bound on how much the
+scaled command may slow the robot down: with $\beta=0.9$, an accepted command must
+advance at least $90\%$ as fast as direct control within the horizon, capping the
+instantaneous slowdown at roughly $10\%$. This constraint is the mechanism that
+keeps VGCC from collapsing into the trivial ``just walk slower'' solution, and
+Section~\ref{sec:results-slowdown} shows empirically that removing it does exactly
+that.
 
-\emph{(b) Rescue (predictive viability).}
-If the \emph{direct command itself} is predicted to drive minimum posture height below a rescue threshold $h_{\text{resc}}$ (set below the eligibility floor $h_{\text{floor}}$, so ordinary roughness does not trigger it), meaning the model foresees height collapse, VGFC instead selects the candidate maximizing predicted minimum posture height among those with non-negative predicted progress.
-This is the gate acting before failure exists: reactive height gates triggered by \emph{measured} height, which we tested in the retrieval variant, either block progress or fire after posture is already lost.
-
-\emph{(c) Restore (measured posture).}
-If measured posture height has already sagged below an operating band, compensation is suspended and the direct command runs until posture recovers; the aggressive proportional command restores height reliably.
-This closes the loop against slow posture drift that a 16-step model horizon cannot see.
-
-\textbf{Bounded, annealed correction.}
-In all modes the selected candidate is applied as a \emph{bounded feedforward correction} rather than a substitute, and the correction gain decays as the goal approaches:
+\textbf{Cost-per-progress objective.}
+With a fixed horizon duration, $\hat C(c)/\max(\hat G(c),\eta)$ is a local
+cost-per-progress score---predicted mechanical work per unit of task progress, a
+cost-of-transport surrogate. Optimizing this rather than instantaneous cost is the
+second half of the same guard: instantaneous power can always be lowered by
+commanding a slower gait, but that trades energy for time at an unchanged
+work-per-meter and is therefore invisible to a cost-per-progress objective. VGCC
+executes the scaled command only if it is eligible and strictly cheaper per unit
+progress by a margin,
 \begin{equation}
-c \;=\; c_{\text{goal}} + \alpha \,\bigl(c^\ast - c_{\text{goal}}\bigr),
-\qquad
-\alpha \;=\; \alpha_0 \operatorname{clip}\!\bigl(\nicefrac{\lVert g \rVert}{d_{\text{anneal}}},\, 0,\, 1\bigr),
-\qquad \alpha_0 = 0.5 .
-\label{eq:blendff}
+\frac{\hat C(c_s)}{\max(\hat G(c_s),\eta)}
+< (1-\epsilon)\,\frac{\hat C(c_d)}{\max(\hat G(c_d),\eta)},
+\label{eq:vgc-cost}
 \end{equation}
-Bounding ($\alpha_0 < 1$) means the compensator biases the reference toward the model's preferred command but never fully owns it; this is the classical feedforward posture (correct the reference, keep the controller), and Section~\ref{sec:ablation-vgfc} shows it is what makes the method robust to model error: full substitution matches the bounded correction on the tuning seed and loses 5--6 success points off it.
-Annealing ($d_{\text{anneal}} = 0.5$\,m) returns full authority to the base policy for the terminal approach, because the success criterion is evaluated at the terminal state, which lies beyond the model's prediction horizon for most of the episode.
-The three modes are checked in the order restore, rescue, follow, so measured evidence overrides predicted evidence.
-The runtime cost of the compensator is negligible: a single batched forward pass over all candidates requires $0.14$\,ms on CPU ($0.08$\,ms on GPU), against the $80$\,ms high-level control interval.
+and otherwise executes $c_d$ exactly. The two constraints together admit an
+intervention only when it is both no more than marginally slower \emph{and}
+cheaper per meter---that is, a genuine efficiency gain within a bounded slowdown,
+not a slowdown dressed up as one.
 
-Altogether VGFC exposes seven scalars: the progress floor $\beta = 0.9$, the posture floors $h_{\text{floor}}$ and $h_{\text{resc}}$ ($0.85$ and $0.80$ of nominal height), the restore band ($0.90$), the relative energy margin $\epsilon = 0.1$, and the correction gain $\alpha_0$ and annealing distance $d_{\text{anneal}}$ of Eq.~\ref{eq:blendff}.
-All were tuned once, on a single seed of one robot, and frozen for every robot and task family we evaluate (Section~\ref{sec:setup}).
+\textbf{Posture rescue and restore.}
+Two reflexes complete the controller. If the model predicts that even the direct
+command will breach the posture floor within the horizon, VGCC selects the
+eligible candidate with the highest predicted minimum height (\emph{rescue}). If
+measured posture has already sagged below the operating band, VGCC suspends
+compensation and issues the aggressive direct command until height recovers
+(\emph{restore}). Both reflexes default toward, not away from, the strong direct
+controller, preserving R2. The model is thus a veto on a known low-cost operating
+point, not an unconstrained optimizer. All scalars are selected on development
+seeds and frozen before confirmation.
 
 \begin{algorithm}[t]
-\caption{Viability-Gated Feedforward Compensation (one high-level step)}
-\label{alg:vgfc}
+\caption{Viability-Gated Command Compensation (one high-level step)}
+\label{alg:vgcc}
 \begin{algorithmic}[1]
-\Require frozen policy $\pi_\theta$, response model $f_\phi$, target $g$, scalars $(\beta, h_{\text{floor}}, h_{\text{resc}}, \delta, \epsilon, \alpha_0, d_{\text{anneal}})$
+\Require frozen policy $\pi_\theta$, response model $f_\phi$, target $g$, scale $s$, correction gain $\alpha$, and fixed scalars $(\beta,h_{\rm floor},\delta,\epsilon)$
 \State Compute body-frame target $g$ and direct command $c_{\text{goal}}$ (Eq.~\ref{eq:cgoal})
-\State Build candidate set $\mathcal{C}$; predict responses $f_\phi(o, c)$ for all $c \in \mathcal{C}$ in one batch
-\If{measured posture $h_{\text{now}} <$ operating band}  \Comment{restore}
-  \State $c^\ast \gets c_{\text{goal}}$
-\ElsIf{$\hat{h}_{\min}(c_{\text{goal}}) < h_{\text{resc}}$}  \Comment{rescue: predicted collapse}
-  \State $c^\ast \gets \arg\max_{c\,:\,\hat{P}(c) \ge 0} \hat{h}_{\min}(c)$
-\Else  \Comment{follow: energy compensation}
-  \State $c^\ast \gets \arg\min_{c \in \mathcal{C}_{\text{elig}}} \hat{e}(c)$ per Eq.~\ref{eq:follow}
-  \If{$\hat{e}(c^\ast) \ge (1 - \epsilon)\, \hat{e}(c_{\text{goal}})$} $c^\ast \gets c_{\text{goal}}$ \EndIf
+\State Form the executed scaled command $c_{\text{exec}}=c_{\text{goal}}+\alpha(s\,c_{\text{goal}}-c_{\text{goal}})$
+\State Predict $f_\phi(o,c)$ for $c\in\{c_{\text{exec}},c_{\text{goal}}\}$
+\If{measured posture is below the operating band}
+  \State $c\gets c_{\text{goal}}$ \Comment{restore}
+\ElsIf{direct control is predicted to breach the posture floor}
+  \State $c\gets$ eligible candidate with highest predicted $\hat h_{\min}$ \Comment{rescue}
+\ElsIf{$c_{\text{exec}}$ satisfies Eqs.~\ref{eq:vgc-eligible} and~\ref{eq:vgc-cost}}
+  \State $c\gets c_{\text{exec}}$ \Comment{compensate}
+\Else
+  \State $c\gets c_{\text{goal}}$ \Comment{exact direct fallback}
 \EndIf
-\State Execute $\pi_\theta$ with $c = c_{\text{goal}} + \alpha (c^\ast - c_{\text{goal}})$ for $E$ low-level steps \Comment{bounded, annealed; Eq.~\ref{eq:blendff}}
+\State Execute $\pi_\theta$ with $c$ for $E$ low-level steps
 \end{algorithmic}
 \end{algorithm}
 
-\subsection{Retrieval Variant (VGSR)}
-\label{sec:retrieval}
-
-Before arriving at model inversion, we developed \emph{Viability-Gated Skill Residuals} (VGSR), which we report in full as the natural skill-archive alternative.
-The same converged-policy rollouts are segmented into chunks, described by body-frame outcome descriptors (displacement, velocities, yaw rate, height statistics, energy, stability, smoothness), filtered by utility and descriptor novelty, and clustered into an online quality-diversity-style archive~\citep{cully2015robots}.
-At deployment, a chunk is selected by a descriptor-level cost combining predicted progress, initial-state applicability, energy, stability, and utility; its velocity descriptor is converted into a command that is \emph{blended} with the direct command, $c = (1-\lambda)\, c_{\text{goal}} + \lambda\, c_{\text{skill}}$, with $\lambda > 0$ only when a heuristic viability gate (goal alignment, predicted progress, chunk stability, energy z-score, speed cap) accepts the candidate; a learned decision-level gate can further filter it.
-VGSR is the non-parametric counterpart of VGFC: retrieval interpolates only where the archive has coverage, while the response model interpolates over the entire command space; and VGSR's gate checks properties \emph{of an archived chunk}, while VGFC's gate checks \emph{predicted consequences of the actual candidate command in the current state}.
-Section~\ref{sec:results-retrieval} quantifies the difference.
+Comparing a small structured set, rather than searching a broad candidate space or
+planning over a long horizon, is a deliberate choice. The response model is
+reliable for the local, near-stationary consequences of a command
+(Section~\ref{sec:results-model}) but not for ranking many subtly different
+candidates or for compounding predictions over a long horizon. The two-command
+comparison uses the model only where it is trustworthy---to decide whether a known
+efficient operating point is appropriate right now---and leans on the exact
+fallback everywhere else.
 
 \section{Experiments}
 \label{sec:results}
 
-Our experiments answer four questions.
-\emph{Q1}: does compensation improve a strong pretrained policy, and on which metrics (Sections~\ref{sec:results-harder},~\ref{sec:results-coverage})?
-\emph{Q2}: does the recipe transfer across embodiments without re-tuning (Section~\ref{sec:results-coverage})?
-\emph{Q3}: which components carry the effect (Section~\ref{sec:ablation-vgfc})?
-\emph{Q4}: how does model inversion compare with the retrieval-based use of the same experience (Section~\ref{sec:results-retrieval})?
+The experiments ask three questions: whether VGCC reliably reduces its optimized
+running cost on a strong frozen policy without losing success; whether that
+reduction corresponds to lower simulated mechanical work relative to direct
+control and to a tuned fixed command scale; and whether a single configuration
+generalizes across the command space and across embodiments.
 
 \subsection{Setup}
 \label{sec:setup}
 
 \textbf{Environments and robots.}
-All experiments use Isaac Lab~\citep{mittal2023orbit} rough-terrain velocity environments with three embodiments: \texttt{Isaac-Velocity-Rough-Unitree-Go2-v0} and \texttt{Isaac-Velocity-Rough-Anymal-D-v0} (quadrupeds) and \texttt{Isaac-Velocity-Rough-H1-v0} (humanoid), with the publicly distributed pretrained RSL-RL checkpoints~\citep{rudin2022learning,schwarke2025rslrl} as the compensated policies.
-The task is target reaching: move the base to a target $g$ specified relative to the start pose.
-Success requires no early termination, final XY distance below $0.3$\,m, and \emph{final height} above $70\%$ of spawn height.
-Final height is the world-frame height of the base at the episode's last step; it serves as a terminal posture check, so that an episode that reaches the target crouched, collapsed, or mid-fall does not count as a success.
-Because the terrain is procedurally rough, final height reflects both posture and the ground elevation at wherever the robot stops, which is why we report it alongside, rather than inside, the energy and distance metrics.
-We also report final distance, the energy proxy $\operatorname{mean}(\lvert a \odot \dot{q}\rvert)$ (mean absolute mechanical power over the episode), and how often compensation was active.
+All experiments use Isaac Lab~\citep{mittal2023orbit} rough-terrain velocity
+environments with three embodiments: \texttt{Isaac-Velocity-Rough-Unitree-Go2-v0}
+and \texttt{Isaac-Velocity-Rough-Anymal-D-v0} (quadrupeds) and
+\texttt{Isaac-Velocity-Rough-H1-v0} (humanoid), with the publicly distributed
+pretrained RSL-RL checkpoints~\citep{rudin2022learning,schwarke2025rslrl} as the
+compensated policies.
+The task is target reaching: move the base to a target $g$ specified relative to
+the start pose.
+Success requires no early termination, final XY distance below $0.3$\,m, and
+\emph{final height} above $70\%$ of spawn height. Final height is a terminal
+posture check, so that an episode that reaches the target crouched, collapsed, or
+mid-fall does not count as a success. Because the terrain is procedurally rough,
+final height reflects both posture and the ground elevation where the robot stops,
+which is why we report it alongside, rather than inside, the cost and distance
+metrics.
+
+\textbf{Metrics.}
+We report success, final distance, final height, and how often compensation was
+active. The optimized running cost is the dimensionless actuation-effort proxy
+$\operatorname{mean}_{t,j}(|a_{t,j}\dot q_{t,j}|)$; since the public policy action
+$a$ is not measured motor torque, this proxy has no physical energy unit. To test
+whether reducing the proxy reduces mechanical work, a torque-derived evaluation
+records simulator-applied joint torques $\tau$, integrates
+$\sum_{t,j}|\tau_{t,j}\dot q_{t,j}|\Delta t$, and reports mean mechanical power,
+work per traveled meter, cost of transport (COT, normalized by $mg$ and path
+length), and elapsed task time (Sections~\ref{sec:results-main}
+and~\ref{sec:results-baselines}).
+
+\textbf{Baselines.}
+(1)~\texttt{direct}: the pretrained policy under the direct target command, the
+policy being compensated and a strong baseline;
+(2)~\texttt{fixed scaling}: the direct command multiplied by a constant scale
+($0.75$ or $0.90$), the open-loop efficiency heuristic;
+(3)~\texttt{reactive governor}: a measured height/tilt governor that scales the
+command down when measured posture degrades.
+Random and zero-command baselines are excluded as uninformative against a strong
+pretrained policy. A retrieval-based compensator (VGSR) is reported in
+Appendix~\ref{app:retrieval}.
 
 \textbf{Task families.}
-\emph{Harder} Go2 targets: $(2,0)$, $(1.5,1)$, $(0,1.25)$, $(-0.75,0)$, $(1,-1)$, $(0,-1.25)$, $(-1,0.75)$, $(1.75,-0.75)$\,m: long, diagonal, lateral, and backward goals covering the command space (the last three directions were added when the benchmark was expanded and were never used in any tuning).
+\emph{Harder} Go2 targets: $(2,0)$, $(1.5,1)$, $(0,1.25)$, $(-0.75,0)$, $(1,-1)$,
+$(0,-1.25)$, $(-1,0.75)$, $(1.75,-0.75)$\,m: long, diagonal, lateral, and backward
+goals covering the command space (the last three directions were added when the
+benchmark was expanded and were never used in any tuning).
 \emph{Moderate} Go2 targets: $(0.75,0)$, $(0.75,0.75)$, $(1.5,0)$, $(0,0.75)$\,m.
-\emph{Holdout} Go2 directions (never used during any tuning): $(1.25,0.5)$, $(0.5,1)$, $(-0.5,0.5)$, $(1.25,-0.5)$\,m.
-ANYmal-D and H1 use the same eight harder targets as Go2. Excitation collection, identification, and every gate parameter are shared unchanged across the two quadrupeds (Go2 and ANYmal-D). The humanoid reuses this configuration in full except for the posture floor, which is set more conservatively to reflect its higher center of mass and smaller support region (Section~\ref{sec:results-coverage}); in particular the energy margin, the objective, and the response-model architecture are identical across all three robots. The only per-robot components are thus the identified response model and, for the morphologically distinct humanoid, the posture floor, both determined by physical properties rather than tuned to the benchmark.
-
-\textbf{Methods.}
-(1)~\texttt{direct}: the pretrained policy under the direct target command (the policy being compensated, and a strong baseline);
-(2)~\texttt{VGSR}: the retrieval-based variant with heuristic gate (and recovery clause on harder targets);
-(3)~\texttt{VGFC}: model-feedforward compensation (Section~\ref{sec:vgfc}).
-Random/zero-command baselines are excluded as uninformative against a strong pretrained policy.
+\emph{Holdout} Go2 directions (never used during any tuning): $(1.25,0.5)$,
+$(0.5,1)$, $(-0.5,0.5)$, $(1.25,-0.5)$\,m.
+ANYmal-D and H1 use the same eight harder targets as Go2.
 
 \textbf{Protocol.}
-VGFC's seven scalars (Section~\ref{sec:vgfc}) were tuned on a \emph{single} seed (301) on the harder set only, then frozen.
-All reported results use disjoint evaluation seeds: harder $5$ seeds $\times$ $10$ trials $\times$ $8$ targets (400 episodes per method), moderate $3 \times 10$ (120), holdout $3 \times 5$ (60), ANYmal-D $3 \times 5 \times 8$ (120), H1 $3 \times 5 \times 8$ (120).
-Per-robot response models (Go2, ANYmal-D, H1) are identified with the identical recipe.
-We report episode-level bootstrap 95\% CIs.
+VGCC's gate scalars (Section~\ref{sec:vgcc}) were tuned on a \emph{single} Go2 seed
+(301) on the harder set, then frozen for all Go2 and ANYmal-D evaluations.
+Excitation collection, identification, and every gate parameter are shared
+unchanged across the two quadrupeds. The humanoid retains the objective, cost
+margin, response-model architecture, and correction gain, but uses more
+conservative posture thresholds (eligibility, rescue, and restore fractions
+$(0.93,0.90,0.96)$ and height-decline tolerance $0.8$\,cm, versus
+$(0.85,0.80,0.90)$ and $2$\,cm for the quadrupeds), selected after diagnosing the
+humanoid failure mode in Section~\ref{sec:results-coverage}; H1 therefore tests
+morphology-adapted transfer, not zero-tuning transfer.
+All reported results use disjoint evaluation seeds: harder $5$ seeds $\times$ $10$
+trials $\times$ $8$ targets (400 episodes per method), moderate $3\times10$ (120),
+holdout $3\times5$ (60), ANYmal-D $3\times5\times8$ (120), H1 $3\times5\times8$
+(120). Per-robot response models are identified with the identical recipe.
+We report episode-level bootstrap 95\% CIs as descriptive uncertainty summaries.
+Because episodes share a small number of environment seeds, these intervals do not
+establish equivalence or noninferiority; paired seed-level differences are
+reported separately, and success comparisons are phrased as ``no observed
+aggregate loss'' rather than as proof of equality.
 
 \subsection{Response-Model Quality}
 \label{sec:results-model}
 
-Table~\ref{tab:model} reports held-out-episode test metrics for the Go2 response model.
-Displacement and yaw responses are accurately predicted ($R^2 \ge 0.92$); energy is predicted well enough to rank candidates ($R^2 = 0.75$); and terrain-relative posture height is predicted reliably ($R^2 = 0.88$/$0.91$ for min/mean, MAE under $9$\,mm), versus $R^2 = 0.25$ when the same model is trained on world-frame height labels, which terrain elevation corrupts.
-The excitation data also matters: an earlier model trained on utility-filtered archive segments (the natural ``reuse the archive'' shortcut) reached $R^2 = -1.9$ on lateral displacement, because curated high-quality segments underrepresent exactly the sloppy behavior the model must know about.
+Table~\ref{tab:model} reports held-out episode test metrics for the Go2 response
+model.
+Displacement and yaw responses are accurately predicted ($R^2 \ge 0.92$); the
+effort proxy is predicted well enough to rank candidates ($R^2 = 0.75$); and
+terrain-relative posture height is predicted reliably ($R^2 = 0.88$/$0.91$ for
+min/mean, MAE under $9$\,mm), versus $R^2 = 0.25$ when the same model is trained on
+world-frame height labels, which terrain elevation corrupts.
+The excitation data matters as much as the architecture: a model trained on
+utility-filtered archive segments (the natural ``reuse the archive'' shortcut)
+reached $R^2 = -1.9$ on lateral displacement, because curated high-quality
+segments underrepresent exactly the sloppy behavior the gate must anticipate.
+The torque-derived mechanical-power channel used for the physical evaluations is
+identified with the same recipe by a five-member ensemble and reaches
+$R^2 = 0.797$ (MAE $13.0$\,W).
 
 \textbf{Identification data efficiency.}
-Re-identifying the model from episode-group subsamples of the excitation data degrades gracefully: with $50\%$ of the data, displacement $R^2$ holds at $0.93$ and energy drops to $0.72$; with $25\%$ ($\approx$ one minute of parallel simulation), displacement is still $0.92$ and energy $0.62$.
-Displacement, which drives the progress constraint, saturates early; accuracy on energy, the quantity being optimized, is what additional data improves.
-Section~\ref{sec:ablation-vgfc} evaluates the $25\%$ model in closed loop.
+Re-identifying the model from episode-group subsamples degrades gracefully: with
+$50\%$ of the data, displacement $R^2$ holds at $0.93$ and the effort channel drops
+to $0.72$; with $25\%$ ($\approx$ one minute of parallel simulation), displacement
+is still $0.92$ and the effort channel $0.62$.
+Displacement, which drives the progress constraint, saturates early; accuracy on
+the cost channel is what additional data improves. The $25\%$ model is evaluated in
+closed loop in Appendix~\ref{app:ablation}.
 
 \begin{table}[t]
 \centering
-\caption{Go2 command-response model, held-out-episode test metrics ($\sim$25k excitation windows, 16-step horizon). Terrain-relative height labels are essential for the viability gate.}
+\caption{Go2 command-response model, held-out episode test metrics ($\sim$25k excitation windows, 16-step horizon). Terrain-relative height labels are essential for the viability gate.}
 \label{tab:model}
 \begin{tabular}{lccc}
 \toprule
@@ -338,7 +607,7 @@ Output & MAE & RMSE & $R^2$ \\
 $\Delta x$ (m)            & 0.019 & 0.025 & 0.944 \\
 $\Delta y$ (m)            & 0.019 & 0.025 & 0.942 \\
 $\Delta \psi$ (rad)       & 0.029 & 0.042 & 0.927 \\
-energy (per step)         & 0.435 & 0.625 & 0.752 \\
+effort proxy (per step)   & 0.435 & 0.625 & 0.752 \\
 min.\ rel.\ height (m)    & 0.009 & 0.012 & 0.875 \\
 mean rel.\ height (m)     & 0.008 & 0.010 & 0.906 \\
 \midrule
@@ -347,233 +616,351 @@ min.\ height, world-frame labels & 0.039 & 0.092 & 0.247 \\
 \end{tabular}
 \end{table}
 
-\subsection{Go2 Harder Targets: Main Result}
-\label{sec:results-harder}
+\subsection{Main Result: Go2 Harder Targets}
+\label{sec:results-main}
 
-The harder-target benchmark comprises eight targets (five original plus three added directions, Section~\ref{sec:setup}) evaluated over 5 seeds $\times$ 10 trials, i.e.\ 400 episodes per method.
+The harder-target benchmark comprises eight targets evaluated over 5 seeds
+$\times$ 10 trials, i.e.\ 400 episodes per method.
 
-\textbf{Aggregate.}
-VGFC reduces energy by $10.5\%$ ($1.976$ vs.\ $2.208$; CIs $[1.938, 2.016]$ vs.\ $[2.156, 2.256]$, non-overlapping) while success is statistically matched ($0.797$, CI $[0.760, 0.835]$, vs.\ $0.805$, CI $[0.765, 0.843]$), with matched final distance and height and zero early terminations for either method.
-The energy effect is consistent \emph{within} seeds: the paired per-seed difference is negative on all five benchmark seeds ($-6.4\%$ to $-14.3\%$), and on all 17 evaluation seeds across the Go2 families, ANYmal-D, and H1 (sign test $p < 10^{-5}$), while the paired success difference is centered on zero ($-0.05$ to $+0.04$).
-Figure~\ref{fig:paired} visualizes both distributions. We report the aggregate in text rather than as a bar chart, since the finding reduces to a single energy reduction alongside a null effect on success, which a grouped bar chart would not convey more clearly.
-The retrieval variant, evaluated on the original five-target protocol (250 episodes), reaches a similar per-family energy level ($2.061$ vs.\ VGFC's $2.073$ under that protocol) but with a $1.2\%$ termination rate and lower final height, and, as Section~\ref{sec:results-retrieval} shows, its savings do not persist across the other task families.
+\textbf{Running cost.}
+VGCC reduces the actuation-effort proxy by $10.5\%$ ($1.976$ vs.\ $2.208$;
+descriptive episode-bootstrap CIs $[1.938, 2.016]$ vs.\ $[2.156, 2.256]$). Observed
+success is similar ($0.797$, CI $[0.760, 0.835]$, vs.\ $0.805$, CI
+$[0.765, 0.843]$), as are final distance and height, with zero early terminations
+for either method. The experiment was not powered as an equivalence test, so CI
+overlap is not treated as evidence that success is statistically equal.
+The effect is directionally consistent \emph{within} seeds: the paired per-seed
+difference is negative on all five benchmark seeds ($-6.4\%$ to $-14.3\%$), and on
+all 17 evaluation seeds across the Go2 families, ANYmal-D, and H1 (two-sided exact
+sign test $p=1.53\times10^{-5}$), while the paired success difference ranges from
+$-0.05$ to $+0.05$. Because the pooled sign test combines task families and
+embodiments, it supports consistency of direction, not a common effect size.
+Figure~\ref{fig:paired} visualizes both distributions.
 
 \begin{figure}[t]
 \centering
 \includegraphics[width=0.85\linewidth]{ff_v4_paired_differences.png}
-\caption{Paired per-seed differences (VGFC $-$ direct, evaluated inside the same runs) for every evaluation seed of every task family. Left: the relative energy difference is negative on all 17 evaluation seeds across the five task-family/embodiment combinations (sign test $p < 10^{-5}$). Right: the success difference is centered on zero. Compensation reduces energy without a corresponding reduction in success.}
+\caption{Paired per-seed differences (VGCC $-$ direct) for all evaluation seeds. The effort-proxy difference is negative for 17/17 seeds (two-sided exact sign test $p=1.53\times10^{-5}$). Success differences straddle zero. Points are descriptive seed aggregates; the pooled sign test combines heterogeneous families.}
 \label{fig:paired}
 \end{figure}
 
-\begin{figure}[t]
-\centering
-\includegraphics[width=\linewidth]{ff_v4_harder_trajectories.png}
-\caption{Control examples: XY paths on the eight harder targets (one evaluation seed, 10 trials per method; the green circle is the success radius). VGFC and the direct baseline reach the same target neighborhoods along closely matched paths; the compensation changes how the command is tracked, not where the robot goes.}
-\label{fig:traj}
-\end{figure}
-
-\begin{figure}[t]
-\centering
-\includegraphics[width=\linewidth]{ff_v4_control_example.png}
-\caption{A single compensated episode on the hardest target $(2,0)$. (a)~Both controllers walk 2\,m over rough terrain. (b)~Base height over the episode: during the shaded steps the model predicts that the direct command would breach the posture floor, and the rescue mode substitutes height-preserving candidates; VGFC maintains posture while the uncompensated policy falls below the success threshold. (c)~The response model's per-step energy predictions for the direct command and the chosen candidate; the shaded gap is the predicted saving that the margin requires before compensating.}
-\label{fig:example}
-\end{figure}
-
-\textbf{Control examples.}
-Figure~\ref{fig:traj} overlays the closed-loop XY paths for all trials of one evaluation seed: compensated and uncompensated trajectories are nearly indistinguishable in space, which is the intent, since the compensation acts on command tracking rather than on the route.
-Figure~\ref{fig:example} dissects a single episode on the hardest target and shows the predictive rescue mechanism at work: the model forecasts a posture-floor breach early in the walk, rescue-mode candidates maintain the base height through the critical segment, and the episode terminates at nominal posture, whereas the direct baseline falls below the success threshold.
-
-\textbf{Per-target (Table~\ref{tab:pertarget}).}
-The per-target breakdown accounts for the aggregate result.
-Energy improves on seven of eight targets (up to $-14\%$), with the one exception, the short backward goal, at parity; final height is within a few millimeters everywhere.
-Success differences vary in both directions at the per-target sample size ($n{=}50$): the long diagonal $(1.5,1)$ favors VGFC ($0.800$ vs.\ $0.740$, the target the annealed correction is designed to protect), the two long forward and diagonal goals favor the direct baseline by a comparable margin, and the remaining five are matched.
-We make no claim of a single-target success effect: across protocol versions these $n{=}50$ differences varied by $\pm 0.1$ while the energy ordering remained unchanged, a pattern consistent with a genuine energy effect and a null effect on success.
-
-\textbf{On final height.}
-Compensated final height is $1$--$3$\,mm below the baseline on the Go2 families ($0.3228$ vs.\ $0.3253$ here, with near-identical CIs).
-This effect is inherent to the objective: among posture-safe candidates the energy minimizer favors marginally gentler commands, and on a velocity-conditioned policy gait vigor and carried height are weakly coupled, so the lowest-energy safe gait is marginally lower in height.
-The posture floors and the restore mode bound this coupling to the millimeter scale (early unconstrained variants lost centimeters, and the task, with them; Section~\ref{sec:ablation-vgfc}); on ANYmal-D final height is identical to the baseline, and on H1 it is within $1.3$\,cm, the conservative posture floor keeping the compensated humanoid close to the base policy's carriage (Table~\ref{tab:coverage}).
-
-\textbf{On the residual failure mode.}
-Every failure on this benchmark, for both methods (81 and 78 of 400 episodes respectively), is of a single kind: the robot reaches the target region but finishes below the height criterion after its gait has settled low over the walk.
-We examined whether a posture-aware stopping rule could recover these episodes: under a symmetric protocol in which \emph{neither} controller may terminate the task while posture is low (the direct baseline continues tracking; VGFC selects the candidate with the highest predicted posture among those remaining within the target region), success does not improve for either method at $n{=}400$ per method; episodes instead expend their remaining budget attempting recovery, occasionally falling (early terminations appear for both methods), and the additional low-motion steps inflate the denominator of the per-step energy metric.
-Individual episodes are recoverable, as Figure~\ref{fig:example} illustrates, but in aggregate the low-posture arrival state is governed by terrain and gait-settling dynamics that command-level intervention does not reliably reverse.
-This delimits what any compensator operating at this interface can achieve on this success criterion, and is why our principal claim concerns energy at matched success rather than success itself.
+\textbf{Torque-derived mechanical work.}
+To test whether the proxy reduction reflects mechanical effort, we re-evaluate the
+same configuration on three new seeds ($2$ trials $\times$ $8$ targets; 48 episodes
+per method) while recording simulator-applied joint torque
+(Table~\ref{tab:physical-energy}). Absolute mechanical work decreases on all three
+seeds ($-8.4\%$, $-9.4\%$, $-6.6\%$; $-8.2\%$ pooled). The decomposition is
+informative: VGCC lowers mean mechanical power by $16.1\%$ but takes $10.9\%$
+longer, so the work saving is smaller than the power saving, and work per traveled
+meter and COT fall by $6.3\%$. Observed success differs by $-2.1$ points. This
+evaluation supports a simulated mechanical-work reduction for the main
+configuration; it is not an electrical or hardware energy claim, and its
+robustness to re-identification and to a tuned fixed scale is examined next.
 
 \begin{table}[t]
 \centering
-\caption{Per-target breakdown on the eight harder targets (50 episodes per target per method), ordered by the paired energy saving. Energy improves on seven of eight targets, by up to $12.9\%$; success differences at this sample size scatter in both directions around parity, and final height is matched to a few millimeters.}
-\label{tab:pertarget}
-\begin{tabular}{lccccccc}
+\caption{Torque-derived mechanical-work evaluation of the main configuration on three new seeds ($n=48$ episodes per method). Work is $\sum_{t,j}|\tau_{t,j}\dot q_{t,j}|\Delta t$ using simulator-applied torque; COT normalizes by $mg$ and traveled path length. Values are descriptive because there are only three independent seeds.}
+\label{tab:physical-energy}
+\begin{tabular}{lrrr}
 \toprule
-& \multicolumn{3}{c}{Energy $\downarrow$} & \multicolumn{2}{c}{Success $\uparrow$} & \multicolumn{2}{c}{Final height (m)} \\
-\cmidrule(lr){2-4}\cmidrule(lr){5-6}\cmidrule(lr){7-8}
-Target (m) & VGFC & direct & $\Delta$ & VGFC & direct & VGFC & direct \\
+Metric & VGCC & direct & $\Delta$ \\
 \midrule
-$(0,1.25)$           & \textbf{1.815} & 2.083 & $\mathbf{-12.9\%}$ & 0.940 & 0.980 & 0.340 & 0.351 \\
-$(1.75,-0.75)$       & \textbf{2.217} & 2.542 & $\mathbf{-12.8\%}$ & 0.480 & 0.520 & 0.276 & 0.285 \\
-$(-1,0.75)$          & \textbf{1.861} & 2.122 & $\mathbf{-12.3\%}$ & 1.000 & 1.000 & 0.358 & 0.367 \\
-$(0,-1.25)$          & \textbf{1.822} & 2.073 & $\mathbf{-12.1\%}$ & 0.940 & 0.980 & 0.345 & 0.350 \\
-$(1.5,1)$            & \textbf{2.203} & 2.471 & $\mathbf{-10.8\%}$ & 0.800 & 0.740 & 0.316 & 0.313 \\
-$(2,0)$              & \textbf{2.367} & 2.619 & $\mathbf{-9.6\%}$  & 0.240 & 0.260 & 0.233 & 0.224 \\
-$(1,-1)$             & \textbf{2.028} & 2.240 & $\mathbf{-9.5\%}$  & 0.980 & 0.960 & 0.355 & 0.349 \\
-$(-0.75,0)$          & 1.496 & \textbf{1.510} & $-0.9\%$ & 1.000 & 1.000 & 0.359 & 0.363 \\
+Success & 0.771 & 0.792 & $-0.021$ \\
+Effort proxy & 1.933 & 2.280 & $-15.2\%$ \\
+Absolute mechanical work (J) & 129.89 & 141.48 & $-8.2\%$ \\
+Mean absolute power (W) & 60.29 & 71.88 & $-16.1\%$ \\
+Elapsed task time (s) & 2.113 & 1.905 & $+10.9\%$ \\
+Work per path length (J/m) & 111.14 & 118.60 & $-6.3\%$ \\
+Cost of transport & 0.754 & 0.805 & $-6.3\%$ \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\subsection{Systematic Coverage: Moderate, Holdout, and H1}
-\label{sec:results-coverage}
+\subsection{Strong Baselines: Fixed Scaling and a Reactive Governor}
+\label{sec:results-baselines}
 
-A compensation layer must improve performance where the base policy is weak, avoid degrading it where the base policy is strong, and transfer across embodiments without manual tuning.
-Table~\ref{tab:coverage} evaluates the configuration on the remaining Go2 target families and on two further robots, ANYmal-D and H1, using the same eight-target benchmark for the cross-embodiment rows.
+A tuned fixed command scale is the simplest efficiency heuristic and a demanding
+baseline, so we compare against it directly on a locked three-seed evaluation
+using the torque-derived power channel (Table~\ref{tab:objective-audit}). We
+report VGCC under both cost channels---the effort proxy and mechanical power---to
+show the comparison is not an artifact of which channel is optimized.
+
+The result sharpens the paper's claim rather than inflating it. Both VGCC channels
+reduce instantaneous mechanical power relative to direct control ($-8\%$ and
+$-9\%$), but their $14\%$ longer episodes leave total work and COT no better than
+direct on these seeds. The mechanical-work reduction in
+Table~\ref{tab:physical-energy} is therefore configuration- and seed-dependent: it
+appears in the main configuration but not under re-identification here, which is
+exactly why we do not claim a robust mechanical-energy advantage over the
+baselines. Fixed $0.75$ scaling attains the lowest COT of all methods,
+but at a $40\%$ completion-time penalty, and it requires choosing a global scale
+in advance. In other words, on a single robot with a weakly constrained deadline,
+a well-tuned fixed scale is a strong---often the strongest---baseline on COT. VGCC
+is not proposed as a universal COT winner over that baseline; its advantage is that
+it is closed-loop and adaptive. It reduces cost only where the model certifies a
+viable, progress-preserving operating point, it keeps direct control's completion
+time far more than aggressive scaling does, and---critically---the \emph{same}
+configuration transfers across the command space and across embodiments, whereas a
+fixed scale must be retuned per robot and can be actively unsafe
+(Section~\ref{sec:results-coverage}).
 
 \begin{table}[t]
 \centering
-\caption{Systematic coverage on the eight-target benchmark (moderate and holdout are additional Go2-specific target sets). Energy $\Delta$ is VGFC relative to the direct baseline evaluated inside the same runs. Success is statistically matched in every family and energy is reduced in every family; the paired per-seed energy difference is negative on all evaluation seeds (Go2 and ANYmal-D under the shared quadruped configuration; H1 with the posture floor matched to the humanoid, Section~\ref{sec:setup}).}
+\caption{Locked baseline comparison (3 new seeds, $n=48$/method) using the torque-derived power channel. VGCC is shown under both cost channels. Lower instantaneous power alone does not reduce total work, because task duration changes; a tuned fixed scale is strongest on COT but $40\%$ slower and must be chosen per robot.}
+\label{tab:objective-audit}
+\begin{tabular}{lrrrrr}
+\toprule
+Method & Success & Work (J) $\downarrow$ & Power (W) $\downarrow$ & Time (s) $\downarrow$ & COT $\downarrow$ \\
+\midrule
+VGCC (power cost) & 0.771 & 128.40 & 59.14 & 2.123 & 0.742 \\
+VGCC (proxy cost) & 0.833 & 126.45 & 58.40 & 2.130 & 0.735 \\
+fixed scaling ($0.75$) & \textbf{0.854} & \textbf{114.89} & \textbf{42.68} & 2.622 & \textbf{0.663} \\
+reactive governor & 0.792 & 126.18 & 47.08 & 2.780 & 0.728 \\
+direct & 0.833 & 122.89 & 64.18 & \textbf{1.868} & 0.710 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Is the Reduction Just a Slowdown?}
+\label{sec:results-slowdown}
+
+The most direct objection to any command-shaping efficiency method is that it
+merely slows the robot down: instantaneous power falls trivially with speed, so a
+$16\%$ power reduction bought with an $11\%$ longer episode
+(Table~\ref{tab:physical-energy}) could be an artifact rather than a gain. We take
+this objection seriously and answer it on three grounds, then state its residual
+force honestly.
+
+\emph{First, the reported metric is slowdown-invariant.} Cost of transport and work
+per meter measure energy per unit \emph{distance}, not per unit time. Walking the
+same path with the same gait more slowly leaves both unchanged. The main
+configuration's $6.3\%$ COT reduction (Table~\ref{tab:physical-energy}) therefore
+cannot be produced by slowing down alone; it requires a genuinely cheaper gait per
+meter. We deliberately headline COT and work rather than power for exactly this
+reason.
+
+\emph{Second, the method contains an explicit bound on slowdown, and the ablation
+shows it is load-bearing.} The progress floor $\beta=0.9$ (Eq.~\ref{eq:vgc-eligible})
+forbids any accepted command that would advance less than $90\%$ as fast as direct
+control within the horizon. When we remove it (Appendix~\ref{app:ablation}), VGCC
+does collapse toward the slowdown solution the objection describes: the proxy
+reduction deepens from $-12.2\%$ to $-19.6\%$, active steps rise by $69\%$, and
+success falls by $3.7$ points. VGCC is the configuration that deliberately declines
+that deeper but slower and less reliable operating point.
+
+\emph{Third, VGCC's slowdown is bounded and selective, not global.} A fixed scale
+slows every command on every step; VGCC slows only the steps its model certifies as
+viable and progress-preserving, and reverts to full-speed direct control
+elsewhere. The measurable consequence is in Table~\ref{tab:objective-audit}: VGCC
+lengthens episodes by $\approx14\%$, whereas the fixed $0.75$ scale that reaches the
+lowest COT pays a $40\%$ time penalty for it. Whatever energy VGCC saves, it saves
+near direct control's completion time, which a global slowdown cannot.
+
+The residual force of the objection is real and we do not hide it: on a single
+robot with a loose deadline, a tuned fixed scale reaches a \emph{lower} COT than
+VGCC by accepting that larger slowdown, and under re-identification VGCC's work
+advantage over direct control is not robust (Section~\ref{sec:results-baselines}).
+So the honest claim is not that VGCC beats a slowdown on energy---it is that VGCC
+delivers a bounded, success-preserving efficiency gain at a small and controlled
+time cost, using one configuration that stays safe where an unconstrained slowdown
+does not (Section~\ref{sec:results-coverage}).
+
+\subsection{Coverage and Cross-Embodiment Transfer}
+\label{sec:results-coverage}
+
+A compensation layer should improve efficiency where the base policy is wasteful
+and avoid degrading it where the base policy is strong, using one configuration.
+Table~\ref{tab:coverage} evaluates the frozen configuration on the remaining Go2
+target families and on two further robots. This is where the closed-loop,
+per-state nature of VGCC pays off relative to a fixed scale.
+
+\begin{table}[t]
+\centering
+\caption{Coverage across task families and embodiments. $\Delta$ is the relative change in the actuation-effort proxy. Success CIs are descriptive, not equivalence tests. Go2 and ANYmal-D use the frozen quadruped configuration; H1 uses morphology-adapted posture thresholds (Section~\ref{sec:setup}).}
 \label{tab:coverage}
 \begin{tabular}{llcccc}
 \toprule
-Family ($n$/method) & Method & Success $\uparrow$ & Energy $\downarrow$ & Energy $\Delta$ & Final height (m) \\
+Family ($n$/method) & Method & Success $\uparrow$ & Effort $\downarrow$ & Effort $\Delta$ & Final height (m) \\
 \midrule
 \multirow{2}{*}{Go2 moderate (120)}
- & VGFC   & 0.975 {\scriptsize$[0.942, 1.000]$} & \textbf{1.743} {\scriptsize$[1.689, 1.802]$} & $-5.4\%$ & 0.356 \\
- & direct & \textbf{0.992} {\scriptsize$[0.975, 1.000]$} & 1.844 {\scriptsize$[1.763, 1.932]$} & -- & \textbf{0.362} \\
+ & VGCC   & 0.975 {\scriptsize$[0.942, 1.000]$} & \textbf{1.743} {\scriptsize$[1.689, 1.802]$} & $-5.4\%$ & 0.356 \\
+ & direct & \textbf{0.992} {\scriptsize$[0.975, 1.000]$} & 1.844 {\scriptsize$[1.763, 1.932]$} & N/A & \textbf{0.362} \\
 \midrule
 \multirow{2}{*}{Go2 holdout (60)}
- & VGFC   & \textbf{0.933} {\scriptsize$[0.867, 0.983]$} & \textbf{1.936} {\scriptsize$[1.836, 2.037]$} & $-8.0\%$ & \textbf{0.334} \\
- & direct & 0.917 {\scriptsize$[0.833, 0.983]$} & 2.105 {\scriptsize$[1.982, 2.234]$} & -- & 0.333 \\
+ & VGCC   & \textbf{0.933} {\scriptsize$[0.867, 0.983]$} & \textbf{1.936} {\scriptsize$[1.836, 2.037]$} & $-8.0\%$ & \textbf{0.334} \\
+ & direct & 0.917 {\scriptsize$[0.833, 0.983]$} & 2.105 {\scriptsize$[1.982, 2.234]$} & N/A & 0.333 \\
 \midrule
 \multirow{2}{*}{ANYmal-D, 8 targets (120)}
- & VGFC   & \textbf{0.883} {\scriptsize$[0.825, 0.942]$} & \textbf{1.367} {\scriptsize$[1.317, 1.422]$} & $-3.9\%$ & 0.500 \\
- & direct & 0.875 {\scriptsize$[0.817, 0.933]$} & 1.422 {\scriptsize$[1.373, 1.471]$} & -- & 0.500 \\
+ & VGCC   & \textbf{0.883} {\scriptsize$[0.825, 0.942]$} & \textbf{1.367} {\scriptsize$[1.317, 1.422]$} & $-3.9\%$ & 0.500 \\
+ & direct & 0.875 {\scriptsize$[0.817, 0.933]$} & 1.422 {\scriptsize$[1.373, 1.471]$} & N/A & 0.500 \\
 \midrule
 \multirow{2}{*}{H1, 8 targets (120)}
- & VGFC   & 0.967 {\scriptsize$[0.933, 0.992]$} & \textbf{0.690} {\scriptsize$[0.665, 0.716]$} & $-4.7\%$ & 0.928 \\
- & direct & \textbf{0.975} {\scriptsize$[0.942, 1.000]$} & 0.724 {\scriptsize$[0.696, 0.752]$} & -- & \textbf{0.941} \\
+ & VGCC   & 0.967 {\scriptsize$[0.933, 0.992]$} & \textbf{0.690} {\scriptsize$[0.665, 0.716]$} & $-4.7\%$ & 0.928 \\
+ & direct & \textbf{0.975} {\scriptsize$[0.942, 1.000]$} & 0.724 {\scriptsize$[0.696, 0.752]$} & N/A & \textbf{0.941} \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 \textbf{Moderate and holdout targets.}
-Energy drops on both families ($-5.4\%$ and $-8.0\%$) at statistically matched success ($0.975$ vs.\ $0.992$ and $0.933$ vs.\ $0.917$, CIs overlapping in both directions).
-The holdout family is the most informative case: these directions were not observed during any tuning, so the frozen gates generalize across the command space, a property the retrieval variant does not possess (Section~\ref{sec:results-retrieval}: the archive variant \emph{increases} energy on these directions).
+The effort proxy drops on both families ($-5.4\%$ and $-8.0\%$), while observed
+success differs by $-1.7$ and $+1.6$ percentage points. The holdout family is the
+most informative case: these directions were never observed during any tuning, so
+the frozen gate generalizes across the command space---a property the retrieval
+variant does not possess (Appendix~\ref{app:retrieval}: the archive variant
+\emph{increases} the proxy on these directions).
 
 \textbf{Third embodiment, zero re-tuning: ANYmal-D.}
-Applying the recipe unchanged to a different quadruped on the full eight-target benchmark reduces energy by $3.9\%$ at matched success ($0.883$ vs.\ $0.875$), with identical final posture and zero terminations; the paired energy difference is negative on all three ANYmal seeds.
-Since not a single parameter was adjusted, this indicates that the compensation exploits a structural property of proportional command tracking on rough terrain rather than an artifact specific to the Go2 policy, and that the identification recipe is the only per-robot component the method needs.
-(The retrieval variant is absent from this row by construction: VGSR requires building and curating a per-robot behavior archive, which is exactly the dependency the response model removes.)
+Applying the recipe unchanged to a different quadruped reduces the effort proxy by
+$3.9\%$; observed success is $0.883$ vs.\ $0.875$, with identical final posture and
+zero terminations. The paired effort difference is negative on all three ANYmal
+seeds. Since no gate or objective parameter was adjusted, this is consistent with a
+cross-quadruped effect rather than a Go2-only artifact. A single robot and three
+seeds are nevertheless insufficient to establish broad embodiment generality.
 
-\textbf{H1 humanoid: the safeguard is posture, not the energy margin.}
-On the same eight-target benchmark, VGFC reduces H1 energy by $4.7\%$ at matched success ($0.967$ vs.\ $0.975$), with the paired energy difference negative on all three seeds ($-3.4\%$, $-3.9\%$, $-6.7\%$) and per-target savings up to $11\%$.
-Reaching this required identifying the humanoid's distinct failure mode.
-With the quadruped gate applied unchanged, an aggressive energy margin does capture savings but drives the tall, high-inertia H1 into posture collapse on the long forward and diagonal targets, costing success (the $2$\,m target falls to $0.47$ success): the failure is loss of balance, not an energy misprediction.
-The remedy is morphological rather than a re-tuning of the objective: a humanoid has a substantially higher center of mass and a smaller support region than a quadruped, so its posture floors must be more conservative.
-With the posture floor tightened accordingly (the single gate parameter that reflects morphology) and every other parameter, including the energy margin, left identical to the quadruped configuration, the gate admits only posture-safe candidates, and the energy savings are recovered at matched success.
-H1 therefore extends the result to a third, morphologically distinct embodiment, and localizes the one quantity that a new morphology class requires: the posture safeguard, set from the robot's stability geometry rather than tuned to the benchmark.
+\textbf{H1 humanoid: why the safeguard is posture, not the cost margin.}
+The humanoid is where a fixed aggressive scale fails and the viability gate earns
+its place. With the quadruped gate applied unchanged, an aggressive cost margin
+does capture savings but drives the tall, high-inertia H1 into posture collapse on
+the long forward and diagonal targets, costing success (the $2$\,m target falls to
+$0.47$): the failure is loss of balance, not a cost misprediction. The remedy is
+morphological, not a re-tuning of the objective---a humanoid has a much higher
+center of mass and a smaller support region, so its posture floors must be more
+conservative. With the eligibility, rescue, and restore thresholds tightened and
+every non-posture parameter, including the cost margin, left identical to the
+quadruped configuration, VGCC reduces the H1 effort proxy by $4.7\%$ with success
+$0.967$ vs.\ $0.975$ and the paired effort difference negative on all three seeds
+($-3.4\%$, $-3.9\%$, $-6.7\%$). Because the thresholds were changed after observing
+the failure, this row is morphology-adapted evidence, not zero-shot transfer, and
+needs confirmation on fresh humanoid tasks. Its value here is direct: it shows the
+gate converts an unsafe open-loop slowdown into a safe adaptive one.
 
-\subsection{Retrieval-Based Compensation}
-\label{sec:results-retrieval}
+\subsection{Ablations}
+\label{sec:results-ablation}
 
-The retrieval variant was evaluated extensively before VGFC existed; we first compare head-to-head, then summarize the study it produced.
-
-\textbf{Head-to-head.}
-The three methods were evaluated inside the same runs on the original five-target protocol (5 seeds $\times$ 10 trials, 250 episodes per method, pre-annealing VGFC configuration).
-There, VGSR reaches VGFC's energy level on the harder family ($2.061$ vs.\ $2.073$, both $\approx 12\%$ below direct) but with a $1.2\%$ termination rate and lower final height; on moderate targets its saving is smaller at lower success; and on holdout directions and H1 it \emph{increases} energy ($+3.8\%$, $+4.4\%$), where VGFC reduces energy ($-8\%$) or remains neutral.
-The pattern reflects the coverage argument of Section~\ref{sec:retrieval}: retrieval performs well where the archive is dense (the harder targets around which it was constructed) and degrades outside that support, whereas the response model generalizes across the command space.
-
-\textbf{Multi-seed aggregate.}
-In a five-seed, 200-episode-per-method aggregate on the harder targets, VGSR reduced energy by $7.8\%$ ($1.99$ vs.\ $2.16$, non-overlapping bootstrap CIs) at statistically indistinguishable success ($0.785$ vs.\ $0.800$): consistent, but smaller than VGFC's gains and without success improvement.
-
-\textbf{Gate necessity.}
-Removing VGSR's gate leaves final distance intact but inflates energy by over $50\%$ ($3.18$ vs.\ $2.08$), with the residual activating at nearly twice the gated rate: without an activation mechanism, the archive yields a net increase in energy.
-
-\textbf{Archive capacity is not the determining factor.}
-Trimming the 3{,}904-chunk archive to its top-2{,}000 chunks by utility \emph{improved} success on a shared seed ($0.840$ vs.\ $0.680$), while a top-500 archive gave the lowest energy ($1.75$) at reduced success ($0.760$); all sizes reduced energy versus direct.
-Quality filtering, rather than capacity, is what makes the retrieval variant effective, and its non-monotonic dependence on archive size is a tuning burden that the response model avoids.
-
-\textbf{Learned decision gates.}
-A decision-level viability classifier trained on logged gate decisions (episode-group split, heuristic-gate outputs excluded from inputs) reaches AUC $0.97$, and deployed in intersection with the physical guard it is stable on held-out directions; but trained on episode-level success labels it learns ``low-energy, goal-approaching'' as a proxy and loses success on the height-limited 2\,m target.
-VGFC's gate resolves exactly this: its safety signal is a \emph{predicted physical quantity} (posture height) rather than a correlate of episode outcome.
-
-\subsection{Ablating VGFC's Components}
-\label{sec:ablation-vgfc}
-
-Which parts of VGFC carry the result?
-We ablate one component at a time on the eight-target benchmark under a shared protocol (2 seeds $\times$ 5 trials $\times$ 8 targets $=$ 80 episodes per variant), reporting each variant's paired difference against the direct baseline evaluated in the same runs (Table~\ref{tab:vgfc-ablation}):
-\emph{no annealing} disables the goal-proximity decay of the correction gain;
-\emph{no gate} removes all posture safeguards (height floors, rescue, and restore), leaving only the progress floor;
-\emph{no progress floor} sets $\beta = 0$, leaving only the posture safeguards;
-\emph{substitution} sets $\alpha = 1$, executing the selected candidate verbatim;
-and \emph{25\% data} uses a response model identified from a quarter of the excitation data ($\approx$ one minute of simulation).
-
-\begin{table}[t]
-\centering
-\caption{VGFC component ablations on the eight-target benchmark (2 seeds $\times$ 5 trials $\times$ 8 targets $=$ 80 episodes per variant). Each row removes or alters one component. All quantities are \emph{paired} differences against the direct baseline evaluated in the same runs, which controls for the seed subset and is the only measure comparable across variants; absolute values at this scale are not the calibrated numbers (Section~\ref{sec:results-harder}), and at $n{=}80$ paired success differences below $\sim$0.08 are at the noise level. ``Active steps'' is the mean number of high-level steps per episode (of a $\sim$40-step budget) at which compensation is applied.}
-\label{tab:vgfc-ablation}
-\begin{tabular}{lccc}
-\toprule
-Variant & $\Delta$ energy $\downarrow$ & $\Delta$ success & Active steps \\
-\midrule
-VGFC (full)                 & $-12.2\%$ & $+0.012$ & 11.7 \\
-\midrule
-no annealing                & $-12.2\%$ & $+0.013$ & 12.3 \\
-no viability gate           & $-4.8\%$  & $-0.025$ & 8.9 \\
-no progress floor           & $-19.6\%$ & $-0.037$ & 19.8 \\
-substitution ($\alpha{=}1$) & $-14.0\%$ & $-0.050$ & 16.3 \\
-25\% identification data    & $-6.4\%$  & $-0.012$ & 10.7 \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-The ablations separate the components' roles.
-\textbf{The gate converts predicted savings into realized ones.}
-Removing the posture safeguards does not unleash deeper savings; it forfeits most of them ($-4.8\%$ vs.\ $-12.2\%$) while flipping the paired success difference negative: candidates that look efficient to the model but leave the well-behaved posture regime burn their predicted savings in the recovery dynamics that follow.
-The viability gate is not a tax on compensation; it is the mechanism by which open-loop predictions survive contact with the closed loop.
-\textbf{The progress floor bounds behavioral drift.}
-Without it the compensator is active at nearly every step (19.8 vs.\ 11.7) and realizes the deepest raw saving ($-19.6\%$), but the paired success difference is the second worst in the table and posture is lower; the floor is the conservative tether that keeps the compensated trajectory recognizable as the commanded task.
-\textbf{Bounding the correction is the robustness mechanism.}
-Substitution pays the largest paired success cost ($-5.0$ points here, $-6.4$ points in an earlier 250-episode five-seed protocol) for savings the bounded correction largely retains.
-\textbf{Annealing acts as posture insurance rather than an energy-reduction mechanism.}
-Disabling the goal-proximity decay leaves aggregate energy unchanged ($-12.2\%$ either way); the component exists to return terminal-approach authority to the base policy, and its effect is target-specific rather than aggregate.
-\textbf{Identification is data-efficient and degrades gracefully.}
-With a quarter of the excitation data ($\approx$ one minute of simulation), success stays at parity and the saving shrinks from $-12.2\%$ to $-6.4\%$: the binding resource is the energy channel's accuracy ($R^2$ $0.62$ vs.\ $0.75$), precisely the channel the margin guards, and the safety components hold regardless.
-
-Two further design choices are supported by earlier evidence at scale.
-\textbf{Full substitution degrades off the tuning seed}: across the 250-episode five-seed protocol, the substitution variant saved $18.7\%$ energy but lost $6.4$ success points against direct ($0.664$ vs.\ $0.728$). Model error and beyond-horizon posture drift accumulate when the compensator fully owns the command, which is why the correction is bounded.
-\textbf{The energy margin must be relative}: an \emph{absolute} margin carried from Go2 to H1 \emph{increased} H1 energy by $13.5\%$, because the two robots differ roughly threefold in per-step energy scale ($\approx 2.2$ for Go2 versus $\approx 0.72$ for H1), so a fixed absolute threshold admits phantom savings on the humanoid. The relative margin of Section~\ref{sec:vgfc} is scale-free, which is why the identical $10\%$ setting transfers unchanged across all three robots (Table~\ref{tab:coverage}).
+A paired component study (Appendix~\ref{app:ablation}, $n=80$ per variant) isolates
+the role of each mechanism. Removing the posture gate forfeits most of the proxy
+saving ($-4.8\%$ vs.\ $-12.2\%$) and reduces success; removing the progress floor
+deepens the saving to $-19.6\%$ but reduces success by $3.7$ points; and full
+command substitution ($\alpha=1$) has the largest success cost ($-5.0$ points),
+which is why the correction is bounded. The gate keeps predicted savings inside the
+model's well-behaved posture regime, the progress floor limits behavioral drift,
+and bounded blending avoids the success cost of substitution. Quarter-data
+identification retains displacement $R^2=0.92$ but halves the realized proxy
+reduction, tracking the cost-channel degradation in Section~\ref{sec:results-model}.
 
 \section{Limitations and Future Work}
 \label{sec:limitations}
 
+\textbf{Energy validity.}
+The large-sample benchmark optimizes and reports a dimensionless actuation-effort
+proxy, not energy. A torque-derived evaluation shows lower simulated mechanical
+work for the main configuration (Table~\ref{tab:physical-energy}), but the locked
+baseline comparison (Table~\ref{tab:objective-audit}) shows that the COT margin
+over direct control is not robust to re-identification, and that a tuned fixed
+scale can achieve a lower COT at a large time cost. The consistent effect is
+therefore reduced instantaneous power and running cost with a modest, adaptive
+work saving---not a demonstrated advantage in mechanical energy over a tuned fixed
+scale. Absolute joint work also counts negative work without a motor-efficiency
+model and is not electrical consumption. Hardware voltage/current measurements and
+actuator losses remain necessary for a real energy claim.
+
+\textbf{Completion time.}
+Every efficiency the compensator realizes is entangled with completion time: the
+progress floor bounds the per-step slowdown, but the aggregate episode still runs
+$10$--$14\%$ longer, and the current objective penalizes time only implicitly
+through that floor. The principled fix is an explicit completion-time budget or a
+progress-rate penalty inside Eq.~\ref{eq:vgc-cost}, under which VGCC would be
+provably iso-time and any residual energy saving would be unambiguously a
+gait-efficiency gain rather than a slowdown. Our development-scale probes suggest
+the state-dependent headroom that survives a strict time constraint is small
+(a few percent of work at matched remaining time), so the deployable question is
+not whether such headroom exists but whether it can be predicted accurately enough
+to beat a fixed scale on the time--energy frontier; establishing that requires a
+multi-seed Pareto study varying the fixed scale and a deadline jointly.
+
+\textbf{Statistical validity.}
+Episode-level bootstrap intervals treat episodes as exchangeable even though they
+are nested within a small number of seeds. We expose seed-level paired differences
+to make this dependence visible, but the present seed counts are too small for
+precise family-level uncertainty, and overlapping success intervals do not
+demonstrate equivalence. A confirmatory study should pre-register a
+noninferiority margin for success and use a hierarchical or cluster bootstrap over
+seeds and targets, with roughly ten independent seeds per family.
+
+\textbf{Baselines and objective.}
+The fixed-scaling and reactive-governor baselines establish that the interesting
+comparison is not against direct control alone but against the speed--energy
+frontier those baselines trace. VGCC's argued advantage---per-state adaptivity,
+preserved completion time, and one configuration that is safe across embodiments---is
+supported here qualitatively (holdout generalization, ANYmal-D transfer, H1
+safety) but not yet by a multi-seed Pareto study that varies the fixed scale and a
+completion-time budget jointly. Establishing that a learned per-state gate strictly
+dominates the fixed-scaling frontier under a fixed deadline is the most important
+open quantitative question.
+
 \textbf{Scope.}
-All results are in simulation, on target reaching, with velocity-commanded locomotion policies across three embodiments.
-The framework's assumptions (Section~\ref{sec:setting}) characterize command-conditioned continuous control, not reinforcement learning in general: an unconditioned single-task policy exposes no interface to invert over, a task without command redundancy leaves nothing to save, and sparse long-horizon problems hide command consequences from any short-window response model.
-Within those bounds, the untested breadth is real: end-effector-commanded manipulation and style-commanded character control~\citep{peng2022ase} fill the progress/cost/viability schema of Section~\ref{sec:model} naturally and are the most direct test of generality; for unconditioned policies, distilling a command-conditioned interface first (and then compensating it) is an open path.
-The recipe requires per-robot identification (four minutes of simulation and minutes of training per robot); ANYmal-D shows that identification is the \emph{only} per-robot component, but it remains a component.
-Hardware transfer, where energy savings matter most, is the natural next step; the identification recipe applies unchanged wherever the policy can be safely excited.
+All results are in simulation, on target reaching, with velocity-commanded
+locomotion policies across three embodiments. The framework's assumptions
+(Section~\ref{sec:setting}) characterize command-conditioned continuous control,
+not reinforcement learning in general: an unconditioned single-task policy exposes
+no interface to invert over, a task without command redundancy leaves nothing to
+save, and sparse long-horizon problems hide command consequences from any short
+response model. Within those bounds, the untested breadth is real: end-effector-commanded
+manipulation and style-commanded character control~\citep{peng2022ase} fill the
+progress/cost/viability schema of Section~\ref{sec:model} naturally and are the
+most direct test of generality. The recipe requires per-robot identification (a
+few minutes of simulation and training per robot); within the quadruped pair,
+identification is the only per-robot component, while H1 additionally adapts
+posture settings. Hardware transfer, where true energy savings matter most, is the
+natural next step, and would require handling safe excitation and model shift
+explicitly.
 
-\textbf{Model horizon.}
-The 16-step response horizon captures immediate consequences but not slow drift; the restore mode compensates for this limitation using measured-height feedback.
-A multi-horizon or recurrent response model could subsume that branch.
-
-\textbf{Candidate enumeration.}
-Inversion by enumerating approximately 70 candidates is computationally inexpensive but coarse; gradient-based inversion through $f_\phi$, or a learned amortized compensator, could refine it, at some cost to the robustness that enumeration provides against model error.
-
-\textbf{Task interface.}
-The current task family is target reaching with a proportional reference; richer tasks (path following, disturbance recovery, velocity schedules) would exercise the compensator's progress constraint differently and remain untested.
+\textbf{Model horizon and inversion.}
+The 16-step response horizon captures immediate consequences but not slow drift;
+the restore reflex compensates using measured height feedback, and a
+multiple-horizon or recurrent model could subsume it. Inversion by comparing a
+small structured candidate set is cheap and robust but coarse; gradient-based
+inversion through $f_\phi$, or a learned amortized compensator, could refine it at
+some cost to the robustness that enumeration provides against model error. Richer
+tasks (path following, disturbance recovery, velocity schedules) would exercise the
+progress constraint differently and remain untested.
 
 \section{Conclusion}
 \label{sec:conclusion}
 
-We presented VGFC, which compensates a frozen learned continuous-control policy the way classical control compensates a plant: identify the command-response of the closed loop from the policy's own excitation rollouts, then invert that model at the command interface behind a viability gate that predicts posture safety before execution.
-On Isaac Lab rough terrain, VGFC systematically improves the energy economy of the strong pretrained Go2 controller it compensates ($5$--$11\%$ lower energy at statistically matched success on every task family evaluated, negative on every evaluation seed); transfers to ANYmal-D with zero re-tuning; and to the H1 humanoid, where matching a single morphology-dependent gate parameter, the posture floor, to the humanoid's higher center of mass recovers a comparable energy reduction at matched success.
-The retrieval-based alternative, given a full multi-seed study of its own, captures a smaller energy gain and inherits archive-coverage liabilities; and the component ablations map each safeguard onto its role: the gate converts predicted savings into realized ones, the progress floor bounds behavioral drift, and the bounded correction is what keeps model error from buying energy with success.
-We conclude that a learned policy's own experience is most useful not as a library of behaviors to be replayed, but as identification data for the closed-loop system the policy defines; compensation through the resulting model provides an inexpensive, training-free layer applicable to any command-conditioned policy.
+We presented VGCC, a training-free controller that identifies a frozen policy's
+closed-loop command response and, behind a learned predictive posture gate,
+chooses between a nominally efficient command scale and exact direct control. The
+design is the product of a specific critique of naive command scaling: VGCC scores
+the command it actually executes, optimizes cost per unit progress rather than
+instantaneous cost, and gates on terrain-relative posture with an exact fallback.
+The cost-per-progress objective and the progress floor together answer the natural
+objection that such savings are just a slowdown: the metric is invariant to pure
+slowdown, and the floor bounds the per-step slowdown, so removing it---not keeping
+it---is what drives the controller toward the trivial slow-gait solution
+(Section~\ref{sec:results-slowdown}).
+Empirically, a single configuration reduces the optimized running cost by
+$4$--$10\%$ across four command families and three embodiments with no observed
+aggregate success loss, and a torque-derived evaluation ties this to lower
+simulated mechanical work and cost of transport for the main configuration. A
+locked comparison against a tuned fixed scale keeps the claim honest: fixed scaling
+is a strong COT baseline on a single robot, and VGCC's distinctive value is that it
+is adaptive and safe to deploy unchanged across the command space and across
+embodiments---including a humanoid on which an ungated fixed scale collapses
+posture. What remains for a full physical-efficiency claim is a multi-seed Pareto
+study under a fixed completion-time budget and hardware energy measurement; the
+present study establishes the mechanism and its cross-embodiment robustness in
+simulation.
 
 \subsubsection*{Reproducibility}
-All experiments use public Isaac Lab environments and public pretrained RSL-RL checkpoints.
-Excitation collection, response-model training, evaluation, and plotting code, together with all result files aggregated in this paper, are available in the project repository.
+All experiments use public Isaac Lab environments and public pretrained RSL-RL
+checkpoints. Excitation collection, response-model training, evaluation, and
+plotting code, together with all result files aggregated in this paper, are
+available in the project repository.
+
+\clearpage
+\appendix
+\input{appendix}
 
 \bibliographystyle{unsrtnat}
 \bibliography{references}

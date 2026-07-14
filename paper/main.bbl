@@ -1,4 +1,4 @@
-\begin{thebibliography}{23}
+\begin{thebibliography}{41}
 \providecommand{\natexlab}[1]{#1}
 \providecommand{\url}[1]{\texttt{#1}}
 \expandafter\ifx\csname urlstyle\endcsname\relax
@@ -44,6 +44,153 @@ Jemin Hwangbo, Joonho Lee, Alexey Dosovitskiy, Dario Bellicoso, Vassilios
 \newblock Learning agile and dynamic motor skills for legged robots.
 \newblock \emph{Science Robotics}, 4\penalty0 (26):\penalty0 eaau5872, 2019.
 
+\bibitem[{\r{A}}str{\"o}m and Murray(2008)]{astrom2008feedback}
+Karl~Johan {\r{A}}str{\"o}m and Richard~M. Murray.
+\newblock \emph{Feedback Systems: An Introduction for Scientists and
+  Engineers}.
+\newblock Princeton University Press, 2008.
+
+\bibitem[Francis and Wonham(1976)]{francis1976internal}
+Bruce~A. Francis and W.~Murray Wonham.
+\newblock The internal model principle of control theory.
+\newblock \emph{Automatica}, 12\penalty0 (5):\penalty0 457--465, 1976.
+
+\bibitem[Eysenbach et~al.(2019)Eysenbach, Gupta, Ibarz, and
+  Levine]{eysenbach2019diversity}
+Benjamin Eysenbach, Abhishek Gupta, Julian Ibarz, and Sergey Levine.
+\newblock Diversity is all you need: Learning skills without a reward function.
+\newblock In \emph{International Conference on Learning Representations
+  (ICLR)}, 2019.
+\newblock arXiv:1802.06070.
+
+\bibitem[Cully et~al.(2015)Cully, Clune, Tarapore, and Mouret]{cully2015robots}
+Antoine Cully, Jeff Clune, Danesh Tarapore, and Jean-Baptiste Mouret.
+\newblock Robots that can adapt like animals.
+\newblock \emph{Nature}, 521\penalty0 (7553):\penalty0 503--507, 2015.
+
+\bibitem[Pertsch et~al.(2020)Pertsch, Lee, and Lim]{pertsch2020spirl}
+Karl Pertsch, Youngwoon Lee, and Joseph~J. Lim.
+\newblock Accelerating reinforcement learning with learned skill priors.
+\newblock In \emph{Conference on Robot Learning (CoRL)}, 2020.
+\newblock arXiv:2010.11944.
+
+\bibitem[Deisenroth and Rasmussen(2011)]{deisenroth2011pilco}
+Marc~Peter Deisenroth and Carl~Edward Rasmussen.
+\newblock {PILCO}: A model-based and data-efficient approach to policy search.
+\newblock In \emph{International Conference on Machine Learning (ICML)}, pages
+  465--472, 2011.
+
+\bibitem[Chua et~al.(2018)Chua, Calandra, McAllister, and Levine]{chua2018deep}
+Kurtland Chua, Roberto Calandra, Rowan McAllister, and Sergey Levine.
+\newblock Deep reinforcement learning in a handful of trials using
+  probabilistic dynamics models.
+\newblock In \emph{Advances in Neural Information Processing Systems
+  (NeurIPS)}, volume~31, 2018.
+\newblock arXiv:1805.12114.
+
+\bibitem[Janner et~al.(2019)Janner, Fu, Zhang, and Levine]{janner2019trust}
+Michael Janner, Justin Fu, Marvin Zhang, and Sergey Levine.
+\newblock When to trust your model: Model-based policy optimization.
+\newblock In \emph{Advances in Neural Information Processing Systems
+  (NeurIPS)}, volume~32, 2019.
+\newblock arXiv:1906.08253.
+
+\bibitem[Hafner et~al.(2020)Hafner, Lillicrap, Ba, and
+  Norouzi]{hafner2020dream}
+Danijar Hafner, Timothy Lillicrap, Jimmy Ba, and Mohammad Norouzi.
+\newblock Dream to control: Learning behaviors by latent imagination.
+\newblock In \emph{International Conference on Learning Representations
+  (ICLR)}, 2020.
+\newblock arXiv:1912.01603.
+
+\bibitem[Hansen et~al.(2022)Hansen, Wang, and Su]{hansen2022temporal}
+Nicklas Hansen, Xiaolong Wang, and Hao Su.
+\newblock Temporal difference learning for model predictive control.
+\newblock In \emph{International Conference on Machine Learning (ICML)}, 2022.
+\newblock arXiv:2203.04955.
+
+\bibitem[Nagabandi et~al.(2018)Nagabandi, Kahn, Fearing, and
+  Levine]{nagabandi2018neural}
+Anusha Nagabandi, Gregory Kahn, Ronald~S. Fearing, and Sergey Levine.
+\newblock Neural network dynamics for model-based deep reinforcement learning
+  with model-free fine-tuning.
+\newblock In \emph{IEEE International Conference on Robotics and Automation
+  (ICRA)}, pages 7559--7566, 2018.
+\newblock arXiv:1708.02596.
+
+\bibitem[Mayne et~al.(2000)Mayne, Rawlings, Rao, and
+  Scokaert]{mayne2000constrained}
+David~Q. Mayne, James~B. Rawlings, Christopher~V. Rao, and Pierre O.~M.
+  Scokaert.
+\newblock Constrained model predictive control: Stability and optimality.
+\newblock \emph{Automatica}, 36\penalty0 (6):\penalty0 789--814, 2000.
+
+\bibitem[Falcone et~al.(2007)Falcone, Borrelli, Asgari, Tseng, and
+  Hrovat]{falcone2007predictive}
+Paolo Falcone, Francesco Borrelli, Jahan Asgari, Hongtei~Eric Tseng, and Davor
+  Hrovat.
+\newblock Predictive active steering control for autonomous vehicle systems.
+\newblock \emph{IEEE Transactions on Control Systems Technology}, 15\penalty0
+  (3):\penalty0 566--580, 2007.
+
+\bibitem[Williams et~al.(2018)Williams, Drews, Goldfain, Rehg, and
+  Theodorou]{williams2018information}
+Grady Williams, Paul Drews, Brian Goldfain, James~M. Rehg, and Evangelos~A.
+  Theodorou.
+\newblock Information-theoretic model predictive control: Theory and
+  applications to autonomous driving.
+\newblock \emph{IEEE Transactions on Robotics}, 34\penalty0 (6):\penalty0
+  1603--1622, 2018.
+
+\bibitem[Kabzan et~al.(2019)Kabzan, Hewing, Liniger, and
+  Zeilinger]{kabzan2019learning}
+Juraj Kabzan, Lukas Hewing, Alexander Liniger, and Melanie~N. Zeilinger.
+\newblock Learning-based model predictive control for autonomous racing.
+\newblock \emph{IEEE Robotics and Automation Letters}, 4\penalty0 (4):\penalty0
+  3363--3370, 2019.
+
+\bibitem[Di~Carlo et~al.(2018)Di~Carlo, Wensing, Katz, Bledt, and
+  Kim]{dicarlo2018dynamic}
+Jared Di~Carlo, Patrick~M. Wensing, Benjamin Katz, Gerardo Bledt, and Sangbae
+  Kim.
+\newblock Dynamic locomotion in the {MIT Cheetah 3} through convex
+  model-predictive control.
+\newblock In \emph{IEEE/RSJ International Conference on Intelligent Robots and
+  Systems (IROS)}, pages 1--9, 2018.
+
+\bibitem[Hewing et~al.(2020)Hewing, Wabersich, Menner, and
+  Zeilinger]{hewing2020learning}
+Lukas Hewing, Kim~P. Wabersich, Marcel Menner, and Melanie~N. Zeilinger.
+\newblock Learning-based model predictive control: Toward safe learning in
+  control.
+\newblock \emph{Annual Review of Control, Robotics, and Autonomous Systems},
+  3:\penalty0 269--296, 2020.
+
+\bibitem[Garone et~al.(2017)Garone, Di~Cairano, and
+  Kolmanovsky]{garone2017reference}
+Emanuele Garone, Stefano Di~Cairano, and Ilya Kolmanovsky.
+\newblock Reference and command governors for systems with constraints: A
+  survey on theory and applications.
+\newblock \emph{Automatica}, 75:\penalty0 306--328, 2017.
+
+\bibitem[Wabersich and Zeilinger(2021)]{wabersich2021predictive}
+Kim~P. Wabersich and Melanie~N. Zeilinger.
+\newblock A predictive safety filter for learning-based control of constrained
+  nonlinear dynamical systems.
+\newblock \emph{Automatica}, 129:\penalty0 109597, 2021.
+
+\bibitem[He et~al.(2024)He, Zhang, Xiao, He, Liu, and Shi]{he2024agile}
+Tairan He, Chong Zhang, Wenli Xiao, Guanqi He, Changliu Liu, and Guanya Shi.
+\newblock Agile but safe: Learning collision-free high-speed legged locomotion.
+\newblock In \emph{Robotics: Science and Systems (RSS)}, 2024.
+\newblock arXiv:2401.17583.
+
+\bibitem[Kim et~al.(2024)Kim, Han, Ravichandar, and Ha]{kim2024koopman}
+Jeonghwan Kim, Yunhai Han, Harish Ravichandar, and Sehoon Ha.
+\newblock Learning {Koopman} dynamics for safe legged locomotion with
+  reinforcement learning-based controller.
+\newblock \emph{arXiv preprint arXiv:2409.14736}, 2024.
+
 \bibitem[Sutton et~al.(1999)Sutton, Precup, and Singh]{sutton1999options}
 Richard~S. Sutton, Doina Precup, and Satinder Singh.
 \newblock Between {MDPs} and semi-{MDPs}: A framework for temporal abstraction
@@ -57,14 +204,6 @@ Pierre-Luc Bacon, Jean Harb, and Doina Precup.
 \newblock In \emph{Proceedings of the AAAI Conference on Artificial
   Intelligence}, volume~31, 2017.
 
-\bibitem[Eysenbach et~al.(2019)Eysenbach, Gupta, Ibarz, and
-  Levine]{eysenbach2019diversity}
-Benjamin Eysenbach, Abhishek Gupta, Julian Ibarz, and Sergey Levine.
-\newblock Diversity is all you need: Learning skills without a reward function.
-\newblock In \emph{International Conference on Learning Representations
-  (ICLR)}, 2019.
-\newblock arXiv:1802.06070.
-
 \bibitem[Sharma et~al.(2020)Sharma, Gu, Levine, Kumar, and
   Hausman]{sharma2020dynamics}
 Archit Sharma, Shixiang Gu, Sergey Levine, Vikash Kumar, and Karol Hausman.
@@ -72,12 +211,6 @@ Archit Sharma, Shixiang Gu, Sergey Levine, Vikash Kumar, and Karol Hausman.
 \newblock In \emph{International Conference on Learning Representations
   (ICLR)}, 2020.
 \newblock arXiv:1907.01657.
-
-\bibitem[Pertsch et~al.(2020)Pertsch, Lee, and Lim]{pertsch2020spirl}
-Karl Pertsch, Youngwoon Lee, and Joseph~J. Lim.
-\newblock Accelerating reinforcement learning with learned skill priors.
-\newblock In \emph{Conference on Robot Learning (CoRL)}, 2020.
-\newblock arXiv:2010.11944.
 
 \bibitem[Ajay et~al.(2021)Ajay, Kumar, Agrawal, Levine, and
   Nachum]{ajay2021opal}
@@ -88,37 +221,22 @@ Anurag Ajay, Aviral Kumar, Pulkit Agrawal, Sergey Levine, and Ofir Nachum.
   (ICLR)}, 2021.
 \newblock arXiv:2010.13611.
 
+\bibitem[Peng et~al.(2022)Peng, Guo, Halper, Levine, and Fidler]{peng2022ase}
+Xue~Bin Peng, Yunrong Guo, Lina Halper, Sergey Levine, and Sanja Fidler.
+\newblock {ASE}: Large-scale reusable adversarial skill embeddings for
+  physically simulated characters.
+\newblock In \emph{ACM Transactions on Graphics (SIGGRAPH)}, volume~41, 2022.
+\newblock arXiv:2205.01906.
+
 \bibitem[Mouret and Clune(2015)]{mouret2015illuminating}
 Jean-Baptiste Mouret and Jeff Clune.
 \newblock Illuminating search spaces by mapping elites.
 \newblock \emph{arXiv preprint arXiv:1504.04909}, 2015.
 
-\bibitem[Cully et~al.(2015)Cully, Clune, Tarapore, and Mouret]{cully2015robots}
-Antoine Cully, Jeff Clune, Danesh Tarapore, and Jean-Baptiste Mouret.
-\newblock Robots that can adapt like animals.
-\newblock \emph{Nature}, 521\penalty0 (7553):\penalty0 503--507, 2015.
-
 \bibitem[Pugh et~al.(2016)Pugh, Soros, and Stanley]{pugh2016quality}
 Justin~K. Pugh, Lisa~B. Soros, and Kenneth~O. Stanley.
 \newblock Quality diversity: A new frontier for evolutionary computation.
 \newblock \emph{Frontiers in Robotics and AI}, 3:\penalty0 40, 2016.
-
-\bibitem[Mittal et~al.(2023)Mittal, Yu, Yu, Liu, Rudin, Hoeller, Yuan, Singh,
-  Guo, Mazhar, Mandlekar, Babich, State, Hutter, and Garg]{mittal2023orbit}
-Mayank Mittal, Calvin Yu, Qinxi Yu, Jingzhou Liu, Nikita Rudin, David Hoeller,
-  Jia~Lin Yuan, Ritvik Singh, Yunrong Guo, Hammad Mazhar, Ajay Mandlekar, Buck
-  Babich, Gavriel State, Marco Hutter, and Animesh Garg.
-\newblock Orbit: A unified simulation framework for interactive robot learning
-  environments.
-\newblock \emph{IEEE Robotics and Automation Letters}, 8\penalty0 (6):\penalty0
-  3740--3747, 2023.
-\newblock arXiv:2301.04195.
-
-\bibitem[Schwarke et~al.(2025)Schwarke, Mittal, Rudin, Hoeller, and
-  Hutter]{schwarke2025rslrl}
-Clemens Schwarke, Mayank Mittal, Nikita Rudin, David Hoeller, and Marco Hutter.
-\newblock {RSL-RL}: A learning library for robotics research.
-\newblock \emph{arXiv preprint arXiv:2509.10771}, 2025.
 
 \bibitem[Nachum et~al.(2018)Nachum, Gu, Lee, and Levine]{nachum2018data}
 Ofir Nachum, Shixiang Gu, Honglak Lee, and Sergey Levine.
@@ -126,12 +244,11 @@ Ofir Nachum, Shixiang Gu, Honglak Lee, and Sergey Levine.
 \newblock In \emph{Advances in Neural Information Processing Systems
   (NeurIPS)}, volume~31, 2018.
 
-\bibitem[Peng et~al.(2022)Peng, Guo, Halper, Levine, and Fidler]{peng2022ase}
-Xue~Bin Peng, Yunrong Guo, Lina Halper, Sergey Levine, and Sanja Fidler.
-\newblock {ASE}: Large-scale reusable adversarial skill embeddings for
-  physically simulated characters.
-\newblock In \emph{ACM Transactions on Graphics (SIGGRAPH)}, volume~41, 2022.
-\newblock arXiv:2205.01906.
+\bibitem[Zhao et~al.(2023)Zhao, Kumar, Levine, and Finn]{zhao2023learning}
+Tony~Z. Zhao, Vikash Kumar, Sergey Levine, and Chelsea Finn.
+\newblock Learning fine-grained bimanual manipulation with low-cost hardware.
+\newblock In \emph{Robotics: Science and Systems (RSS)}, 2023.
+\newblock arXiv:2304.13705.
 
 \bibitem[Silver et~al.(2018)Silver, Allen, Tenenbaum, and
   Kaelbling]{silver2018residual}
@@ -160,10 +277,21 @@ Gabriel~B. Margolis and Pulkit Agrawal.
 \newblock In \emph{Conference on Robot Learning (CoRL)}, 2022.
 \newblock arXiv:2212.03238.
 
-\bibitem[Zhao et~al.(2023)Zhao, Kumar, Levine, and Finn]{zhao2023learning}
-Tony~Z. Zhao, Vikash Kumar, Sergey Levine, and Chelsea Finn.
-\newblock Learning fine-grained bimanual manipulation with low-cost hardware.
-\newblock In \emph{Robotics: Science and Systems (RSS)}, 2023.
-\newblock arXiv:2304.13705.
+\bibitem[Mittal et~al.(2023)Mittal, Yu, Yu, Liu, Rudin, Hoeller, Yuan, Singh,
+  Guo, Mazhar, Mandlekar, Babich, State, Hutter, and Garg]{mittal2023orbit}
+Mayank Mittal, Calvin Yu, Qinxi Yu, Jingzhou Liu, Nikita Rudin, David Hoeller,
+  Jia~Lin Yuan, Ritvik Singh, Yunrong Guo, Hammad Mazhar, Ajay Mandlekar, Buck
+  Babich, Gavriel State, Marco Hutter, and Animesh Garg.
+\newblock Orbit: A unified simulation framework for interactive robot learning
+  environments.
+\newblock \emph{IEEE Robotics and Automation Letters}, 8\penalty0 (6):\penalty0
+  3740--3747, 2023.
+\newblock arXiv:2301.04195.
+
+\bibitem[Schwarke et~al.(2025)Schwarke, Mittal, Rudin, Hoeller, and
+  Hutter]{schwarke2025rslrl}
+Clemens Schwarke, Mayank Mittal, Nikita Rudin, David Hoeller, and Marco Hutter.
+\newblock {RSL-RL}: A learning library for robotics research.
+\newblock \emph{arXiv preprint arXiv:2509.10771}, 2025.
 
 \end{thebibliography}

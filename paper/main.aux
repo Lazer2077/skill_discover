@@ -17,113 +17,177 @@
 \providecommand*\HyPL@Entry[1]{}
 \citation{rudin2022learning,makoviychuk2021isaac}
 \citation{lee2020learning,miki2022learning,hwangbo2019learning}
-\citation{sutton1999options,bacon2017option}
-\citation{eysenbach2019diversity,sharma2020dynamics}
-\citation{pertsch2020spirl,ajay2021opal}
-\citation{mouret2015illuminating,cully2015robots,pugh2016quality}
-\citation{mittal2023orbit,schwarke2025rslrl}
+\citation{astrom2008feedback,francis1976internal}
+\citation{eysenbach2019diversity,cully2015robots,pertsch2020spirl}
 \HyPL@Entry{0<</S/D>>}
 \@writefile{toc}{\contentsline {section}{\numberline {1}Introduction}{1}{section.1}\protected@file@percent }
 \newlabel{sec:intro}{{1}{1}{Introduction}{section.1}{}}
-\citation{cully2015robots}
-\citation{sutton1999options}
-\citation{bacon2017option}
-\citation{nachum2018data}
-\citation{eysenbach2019diversity}
-\citation{sharma2020dynamics}
-\citation{pertsch2020spirl}
-\citation{ajay2021opal}
-\citation{peng2022ase}
-\citation{mouret2015illuminating}
-\citation{cully2015robots,pugh2016quality}
-\citation{silver2018residual,johannink2019residual}
+\citation{astrom2008feedback}
+\citation{francis1976internal}
+\citation{deisenroth2011pilco}
+\citation{chua2018deep}
+\citation{janner2019trust}
+\citation{hafner2020dream}
+\citation{hansen2022temporal}
+\citation{nagabandi2018neural}
 \@writefile{toc}{\contentsline {section}{\numberline {2}Related Work}{2}{section.2}\protected@file@percent }
 \newlabel{sec:related}{{2}{2}{Related Work}{section.2}{}}
-\citation{rudin2022learning,makoviychuk2021isaac,mittal2023orbit,schwarke2025rslrl}
-\citation{lee2020learning,miki2022learning}
+\citation{mayne2000constrained}
+\citation{falcone2007predictive}
+\citation{williams2018information}
+\citation{kabzan2019learning}
+\citation{dicarlo2018dynamic}
+\citation{hewing2020learning}
+\citation{garone2017reference}
+\citation{wabersich2021predictive}
+\citation{he2024agile}
+\citation{kim2024koopman}
+\citation{sutton1999options,bacon2017option}
+\citation{eysenbach2019diversity,sharma2020dynamics}
+\citation{pertsch2020spirl,ajay2021opal}
+\citation{peng2022ase}
+\citation{mouret2015illuminating,cully2015robots,pugh2016quality}
+\citation{sharma2020dynamics}
+\citation{nachum2018data}
+\citation{zhao2023learning}
+\citation{silver2018residual,johannink2019residual}
 \citation{kumar2021rma}
 \citation{margolis2022walk}
-\citation{zhao2023learning}
-\citation{cully2015robots}
-\@writefile{toc}{\contentsline {section}{\numberline {3}Method}{3}{section.3}\protected@file@percent }
-\newlabel{sec:method}{{3}{3}{Method}{section.3}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}RL-Converged Online Skill Archive}{3}{subsection.3.1}\protected@file@percent }
-\newlabel{sec:archive}{{3.1}{3}{RL-Converged Online Skill Archive}{subsection.3.1}{}}
-\newlabel{eq:energy}{{1}{3}{RL-Converged Online Skill Archive}{equation.3.1}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.2}Archive Chunk Selection}{3}{subsection.3.2}\protected@file@percent }
-\newlabel{sec:selection}{{3.2}{3}{Archive Chunk Selection}{subsection.3.2}{}}
-\newlabel{eq:cost}{{2}{3}{Archive Chunk Selection}{equation.3.2}{}}
+\citation{rudin2022learning,makoviychuk2021isaac,mittal2023orbit,schwarke2025rslrl}
+\citation{lee2020learning,miki2022learning}
+\citation{margolis2022walk,kumar2021rma}
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces VGFC overview. Offline, excitation rollouts identify the observation conditioned response model $f_\phi $. Online, the model scores candidate commands by predicted progress, effort, and posture; a gated search selects a candidate and blends it with the direct command before the frozen policy executes it.}}{4}{figure.1}\protected@file@percent }
+\newlabel{fig:method}{{1}{4}{VGFC overview. Offline, excitation rollouts identify the observation conditioned response model $f_\phi $. Online, the model scores candidate commands by predicted progress, effort, and posture; a gated search selects a candidate and blends it with the direct command before the frozen policy executes it}{figure.1}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {3}Method}{4}{section.3}\protected@file@percent }
+\newlabel{sec:method}{{3}{4}{Method}{section.3}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}Compensation Interface}{4}{subsection.3.1}\protected@file@percent }
+\newlabel{sec:setting}{{3.1}{4}{Compensation Interface}{subsection.3.1}{}}
+\citation{silver2018residual,johannink2019residual}
+\citation{nagabandi2018neural}
+\newlabel{eq:cgoal}{{1}{5}{Compensation Interface}{equation.3.1}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.2}Command-Response Model}{5}{subsection.3.2}\protected@file@percent }
+\newlabel{sec:model}{{3.2}{5}{Command-Response Model}{subsection.3.2}{}}
+\newlabel{eq:responsemodel}{{2}{5}{Command-Response Model}{equation.3.2}{}}
 \citation{mittal2023orbit}
 \citation{rudin2022learning,schwarke2025rslrl}
-\@writefile{loa}{\contentsline {algorithm}{\numberline {1}{\ignorespaces Build Online Action Archive from a Converged RL Policy}}{4}{algorithm.1}\protected@file@percent }
-\newlabel{alg:archive}{{1}{4}{RL-Converged Online Skill Archive}{algorithm.1}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}Command-Space Residual Control}{4}{subsection.3.3}\protected@file@percent }
-\newlabel{sec:residual}{{3.3}{4}{Command-Space Residual Control}{subsection.3.3}{}}
-\newlabel{eq:blend}{{5}{4}{Command-Space Residual Control}{equation.3.5}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.4}Viability Gating}{4}{subsection.3.4}\protected@file@percent }
-\newlabel{sec:gate}{{3.4}{4}{Viability Gating}{subsection.3.4}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {4}Experimental Setup}{4}{section.4}\protected@file@percent }
-\newlabel{sec:setup}{{4}{4}{Experimental Setup}{section.4}{}}
-\@writefile{loa}{\contentsline {algorithm}{\numberline {2}{\ignorespaces Viability-Gated Skill Residual Control}}{5}{algorithm.2}\protected@file@percent }
-\newlabel{alg:control}{{2}{5}{Viability Gating}{algorithm.2}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Go2 rough terrain, moderate targets (10 trials $\times $ 4 targets). Arrows give the preferred direction.}}{5}{table.1}\protected@file@percent }
-\newlabel{tab:moderate}{{1}{5}{Go2 rough terrain, moderate targets (10 trials $\times $ 4 targets). Arrows give the preferred direction}{table.1}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {5}Results}{5}{section.5}\protected@file@percent }
-\newlabel{sec:results}{{5}{5}{Results}{section.5}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.1}Go2 Rough Terrain: Moderate Targets}{5}{subsection.5.1}\protected@file@percent }
-\newlabel{sec:moderate}{{5.1}{5}{Go2 Rough Terrain: Moderate Targets}{subsection.5.1}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Go2 Rough Terrain: Harder Targets (Main Result)}{5}{subsection.5.2}\protected@file@percent }
-\newlabel{sec:harder}{{5.2}{5}{Go2 Rough Terrain: Harder Targets (Main Result)}{subsection.5.2}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces Go2 rough terrain, harder targets, strengthened aggregate (20 trials $\times $ 5 targets $=$ 100 episodes per method; 3 seeds). Brackets are episode-level bootstrap 95\% CIs.}}{6}{table.2}\protected@file@percent }
-\newlabel{tab:harder}{{2}{6}{Go2 rough terrain, harder targets, strengthened aggregate (20 trials $\times $ 5 targets $=$ 100 episodes per method; 3 seeds). Brackets are episode-level bootstrap 95\% CIs}{table.2}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces Go2 harder targets, strengthened 20-trial aggregate (100 episodes per method). VGSR reduces the energy proxy with overlapping-but-shifted CIs while success is marginally higher; final distance and final height are slightly worse, driven by the height-limited 2\,m forward target (Section\nobreakspace  {}\ref  {sec:negative}).}}{6}{figure.1}\protected@file@percent }
-\newlabel{fig:harder}{{1}{6}{Go2 harder targets, strengthened 20-trial aggregate (100 episodes per method). VGSR reduces the energy proxy with overlapping-but-shifted CIs while success is marginally higher; final distance and final height are slightly worse, driven by the height-limited 2\,m forward target (Section~\ref {sec:negative})}{figure.1}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.3}Gate Ablation: Is the Gate Necessary?}{6}{subsection.5.3}\protected@file@percent }
-\newlabel{sec:ablation}{{5.3}{6}{Gate Ablation: Is the Gate Necessary?}{subsection.5.3}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.4}Learned Viability Gate}{6}{subsection.5.4}\protected@file@percent }
-\newlabel{sec:learned}{{5.4}{6}{Learned Viability Gate}{subsection.5.4}{}}
-\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Go2 harder-target trajectories (blue: VGSR; red: direct). Both controllers reach the target neighborhood (green circle) on most targets; qualitative differences are largest on the diagonal $(1.5,1)$ and lateral $(0,1.25)$ goals where the residual commits to smoother approach paths.}}{7}{figure.2}\protected@file@percent }
-\newlabel{fig:traj}{{2}{7}{Go2 harder-target trajectories (blue: VGSR; red: direct). Both controllers reach the target neighborhood (green circle) on most targets; qualitative differences are largest on the diagonal $(1.5,1)$ and lateral $(0,1.25)$ goals where the residual commits to smoother approach paths}{figure.2}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces Gate ablation on Go2 harder targets (5 trials $\times $ 5 targets, seed 102). ``Resid.\ used'' is the average number of high-level steps with an active residual.}}{7}{table.3}\protected@file@percent }
-\newlabel{tab:gate}{{3}{7}{Gate ablation on Go2 harder targets (5 trials $\times $ 5 targets, seed 102). ``Resid.\ used'' is the average number of high-level steps with an active residual}{table.3}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.5}Cross-Embodiment: H1 Humanoid}{7}{subsection.5.5}\protected@file@percent }
-\newlabel{sec:h1}{{5.5}{7}{Cross-Embodiment: H1 Humanoid}{subsection.5.5}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.6}Negative Results and Failure Modes}{7}{subsection.5.6}\protected@file@percent }
-\newlabel{sec:negative}{{5.6}{7}{Negative Results and Failure Modes}{subsection.5.6}{}}
-\citation{margolis2022walk,kumar2021rma}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}Viability Gated Inversion}{6}{subsection.3.3}\protected@file@percent }
+\newlabel{sec:vgfc}{{3.3}{6}{Viability Gated Inversion}{subsection.3.3}{}}
+\newlabel{eq:follow}{{4}{6}{Viability Gated Inversion}{equation.3.4}{}}
+\newlabel{eq:blendff}{{5}{6}{Viability Gated Inversion}{equation.3.5}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {4}Experiments}{6}{section.4}\protected@file@percent }
+\newlabel{sec:results}{{4}{6}{Experiments}{section.4}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}Setup}{6}{subsection.4.1}\protected@file@percent }
+\newlabel{sec:setup}{{4.1}{6}{Setup}{subsection.4.1}{}}
+\@writefile{loa}{\contentsline {algorithm}{\numberline {1}{\ignorespaces Viability Gated Feedforward Compensation (one high level step)}}{7}{algorithm.1}\protected@file@percent }
+\newlabel{alg:vgfc}{{1}{7}{Viability Gated Inversion}{algorithm.1}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Go2 command response model, held out episode test metrics ($\sim $25k excitation windows, 16-step horizon). Terrain-relative height labels are essential for the viability gate.}}{8}{table.1}\protected@file@percent }
+\newlabel{tab:model}{{1}{8}{Go2 command response model, held out episode test metrics ($\sim $25k excitation windows, 16-step horizon). Terrain-relative height labels are essential for the viability gate}{table.1}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}Response-Model Quality}{8}{subsection.4.2}\protected@file@percent }
+\newlabel{sec:results-model}{{4.2}{8}{Response-Model Quality}{subsection.4.2}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.3}Go2 Harder Targets: Main Result}{8}{subsection.4.3}\protected@file@percent }
+\newlabel{sec:results-harder}{{4.3}{8}{Go2 Harder Targets: Main Result}{subsection.4.3}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.4}Physical Cost and Strong Baseline Audits}{8}{subsection.4.4}\protected@file@percent }
+\newlabel{sec:audits}{{4.4}{8}{Physical Cost and Strong Baseline Audits}{subsection.4.4}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Paired per seed differences (VGFC $-$ direct) for all evaluation seeds. The effort proxy difference is negative for 17/17 seeds (two sided exact sign test $p=1.53\times 10^{-5}$). Success differences straddle zero. Points are descriptive seed aggregates; the pooled sign test combines heterogeneous families.}}{9}{figure.2}\protected@file@percent }
+\newlabel{fig:paired}{{2}{9}{Paired per seed differences (VGFC $-$ direct) for all evaluation seeds. The effort proxy difference is negative for 17/17 seeds (two sided exact sign test $p=1.53\times 10^{-5}$). Success differences straddle zero. Points are descriptive seed aggregates; the pooled sign test combines heterogeneous families}{figure.2}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.5}Mechanistic Audit Designs}{9}{subsection.4.5}\protected@file@percent }
+\newlabel{sec:mechanism-designs}{{4.5}{9}{Mechanistic Audit Designs}{subsection.4.5}{}}
+\newlabel{eq:taskvalue}{{7}{9}{Mechanistic Audit Designs}{equation.4.7}{}}
+\newlabel{eq:taskconstraints}{{8}{9}{Mechanistic Audit Designs}{equation.4.8}{}}
+\newlabel{eq:macrotransition}{{9}{9}{Mechanistic Audit Designs}{equation.4.9}{}}
+\newlabel{eq:treatment-effect}{{10}{9}{Mechanistic Audit Designs}{equation.4.10}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces Torque-derived energy audit on three new seeds ($n=48$ episodes per method). Work is $\DOTSB \sum@ \slimits@ _{t,j}|\tau _{t,j}\dot  q_{t,j}|\Delta t$ using simulator applied torque; COT normalizes by $mg$ and traveled path length. Values are descriptive because there are only three independent seeds.}}{10}{table.2}\protected@file@percent }
+\newlabel{tab:physical-energy}{{2}{10}{Torque-derived energy audit on three new seeds ($n=48$ episodes per method). Work is $\sum _{t,j}|\tau _{t,j}\dot q_{t,j}|\Delta t$ using simulator applied torque; COT normalizes by $mg$ and traveled path length. Values are descriptive because there are only three independent seeds}{table.2}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces Exact replay diagnostic. (a)\nobreakspace  {}All replayed query observations match exactly, while the four step macro model produces a broad terminal input error distribution over 1,075 ensemble predictions. (b)\nobreakspace  {}Work and time outcomes on two unseen seed validations; marker shape denotes DAgger round, color denotes controller, and area scales with observed success. In each round, completion MPC remains above the fixed $0.9$ work and time frontier.}}{11}{figure.3}\protected@file@percent }
+\newlabel{fig:mpc-dagger}{{3}{11}{Exact replay diagnostic. (a)~All replayed query observations match exactly, while the four step macro model produces a broad terminal input error distribution over 1,075 ensemble predictions. (b)~Work and time outcomes on two unseen seed validations; marker shape denotes DAgger round, color denotes controller, and area scales with observed success. In each round, completion MPC remains above the fixed $0.9$ work and time frontier}{figure.3}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces Completion MPC development audit after each exact replay DAgger round. Each block is a new validation seed with $n=16$/method; no validation episode is reused for training. These small development sets diagnose ranking failure and are not confirmatory evidence.}}{11}{table.3}\protected@file@percent }
+\newlabel{tab:mpc-dagger}{{3}{11}{Completion MPC development audit after each exact replay DAgger round. Each block is a new validation seed with $n=16$/method; no validation episode is reused for training. These small development sets diagnose ranking failure and are not confirmatory evidence}{table.3}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {4}{\ignorespaces Exact-replay single intervention oracle. Work/time are measured from the query; every prefix shares the same direct control continuation. The last column reports oracle choices $0.75/0.9/1.0$ under the $1.10$ time ratio.}}{12}{table.4}\protected@file@percent }
+\newlabel{tab:prefix-oracle}{{4}{12}{Exact-replay single intervention oracle. Work/time are measured from the query; every prefix shares the same direct control continuation. The last column reports oracle choices $0.75/0.9/1.0$ under the $1.10$ time ratio}{table.4}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {5}{\ignorespaces Locked objective and baseline audit (3 new seeds, $n=48$/method) using the power augmented ensemble. ``Power VGFC'' minimizes predicted mechanical power; ``proxy VGFC'' uses the original proxy channel of the same model. Lower power alone is insufficient because task duration changes.}}{12}{table.5}\protected@file@percent }
+\newlabel{tab:objective-audit}{{5}{12}{Locked objective and baseline audit (3 new seeds, $n=48$/method) using the power augmented ensemble. ``Power VGFC'' minimizes predicted mechanical power; ``proxy VGFC'' uses the original proxy channel of the same model. Lower power alone is insufficient because task duration changes}{table.5}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.6}Systematic Coverage: Moderate, Holdout, and H1}{12}{subsection.4.6}\protected@file@percent }
+\newlabel{sec:results-coverage}{{4.6}{12}{Systematic Coverage: Moderate, Holdout, and H1}{subsection.4.6}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {6}{\ignorespaces Coverage across task families and embodiments. $\Delta $ is the relative change in the actuation effort proxy. Success CIs are descriptive, not equivalence tests. Go2 and ANYmal-D use the frozen quadruped configuration; H1 uses morphology adapted posture thresholds (Section\nobreakspace  {}\ref  {sec:setup}).}}{13}{table.6}\protected@file@percent }
+\newlabel{tab:coverage}{{6}{13}{Coverage across task families and embodiments. $\Delta $ is the relative change in the actuation effort proxy. Success CIs are descriptive, not equivalence tests. Go2 and ANYmal-D use the frozen quadruped configuration; H1 uses morphology adapted posture thresholds (Section~\ref {sec:setup})}{table.6}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.7}Retrieval-Based Compensation}{13}{subsection.4.7}\protected@file@percent }
+\newlabel{sec:results-retrieval}{{4.7}{13}{Retrieval-Based Compensation}{subsection.4.7}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.8}Ablating VGFC's Components}{13}{subsection.4.8}\protected@file@percent }
+\newlabel{sec:ablation-vgfc}{{4.8}{13}{Ablating VGFC's Components}{subsection.4.8}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {5}Limitations and Future Work}{13}{section.5}\protected@file@percent }
+\newlabel{sec:limitations}{{5}{13}{Limitations and Future Work}{section.5}{}}
+\citation{peng2022ase}
+\@writefile{toc}{\contentsline {section}{\numberline {6}Conclusion}{14}{section.6}\protected@file@percent }
+\newlabel{sec:conclusion}{{6}{14}{Conclusion}{section.6}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {A}Secondary Experiments and Diagnostics}{16}{appendix.A}\protected@file@percent }
+\newlabel{app:secondary}{{A}{16}{Secondary Experiments and Diagnostics}{appendix.A}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {A.1}Qualitative and Per-Target Results}{16}{subsection.A.1}\protected@file@percent }
+\newlabel{app:qualitative}{{A.1}{16}{Qualitative and Per-Target Results}{subsection.A.1}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces XY paths on the eight harder targets (one evaluation seed, 10 trials per method). VGFC and direct control reach similar target neighborhoods.}}{16}{figure.4}\protected@file@percent }
+\newlabel{fig:traj}{{4}{16}{XY paths on the eight harder targets (one evaluation seed, 10 trials per method). VGFC and direct control reach similar target neighborhoods}{figure.4}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {5}{\ignorespaces Selected paired episode illustrating rescue behavior. This example shows mechanism, not prevalence.}}{16}{figure.5}\protected@file@percent }
+\newlabel{fig:example}{{5}{16}{Selected paired episode illustrating rescue behavior. This example shows mechanism, not prevalence}{figure.5}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {7}{\ignorespaces Per-target harder target results (50 episodes per target and method), ordered by proxy reduction.}}{17}{table.7}\protected@file@percent }
+\newlabel{tab:pertarget}{{7}{17}{Per-target harder target results (50 episodes per target and method), ordered by proxy reduction}{table.7}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {8}{\ignorespaces Prefix calibrated completion MPC audit on seed 857 ($n=16$/method). The unrestricted row is untouched validation; the restricted row is a post validation development ablation on the same seed and is not confirmatory.}}{17}{table.8}\protected@file@percent }
+\newlabel{tab:mpc-prefix-calibration}{{8}{17}{Prefix calibrated completion MPC audit on seed 857 ($n=16$/method). The unrestricted row is untouched validation; the restricted row is a post validation development ablation on the same seed and is not confirmatory}{table.8}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {A.2}Exploratory Safety Audits}{17}{subsection.A.2}\protected@file@percent }
+\newlabel{app:safety-audits}{{A.2}{17}{Exploratory Safety Audits}{subsection.A.2}{}}
+\newlabel{eq:height-lcb}{{11}{17}{Exploratory Safety Audits}{equation.A.11}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {A.3}Retrieval Alternative (VGSR)}{17}{subsection.A.3}\protected@file@percent }
+\newlabel{app:retrieval}{{A.3}{17}{Retrieval Alternative (VGSR)}{subsection.A.3}{}}
+\newlabel{sec:retrieval}{{A.3}{17}{Retrieval Alternative (VGSR)}{subsection.A.3}{}}
 \bibstyle{unsrtnat}
 \bibdata{references}
-\@writefile{lot}{\contentsline {table}{\numberline {4}{\ignorespaces Learned-gate evaluation on holdout target directions (5 trials $\times $ 4 targets).}}{8}{table.4}\protected@file@percent }
-\newlabel{tab:holdout}{{4}{8}{Learned-gate evaluation on holdout target directions (5 trials $\times $ 4 targets)}{table.4}{}}
-\@writefile{lot}{\contentsline {table}{\numberline {5}{\ignorespaces Learned gate on Go2 harder targets (5 trials $\times $ 5 targets, seed 103).}}{8}{table.5}\protected@file@percent }
-\newlabel{tab:learnedharder}{{5}{8}{Learned gate on Go2 harder targets (5 trials $\times $ 5 targets, seed 103)}{table.5}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {6}Limitations and Future Work}{8}{section.6}\protected@file@percent }
-\newlabel{sec:limitations}{{6}{8}{Limitations and Future Work}{section.6}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {7}Conclusion}{8}{section.7}\protected@file@percent }
-\newlabel{sec:conclusion}{{7}{8}{Conclusion}{section.7}{}}
 \bibcite{rudin2022learning}{{1}{2022}{{Rudin et~al.}}{{Rudin, Hoeller, Reist, and Hutter}}}
 \bibcite{makoviychuk2021isaac}{{2}{2021}{{Makoviychuk et~al.}}{{Makoviychuk, Wawrzyniak, Guo, Lu, Storey, Macklin, Hoeller, Rudin, Allshire, Handa, and State}}}
 \bibcite{lee2020learning}{{3}{2020}{{Lee et~al.}}{{Lee, Hwangbo, Wellhausen, Koltun, and Hutter}}}
 \bibcite{miki2022learning}{{4}{2022}{{Miki et~al.}}{{Miki, Lee, Hwangbo, Wellhausen, Koltun, and Hutter}}}
 \bibcite{hwangbo2019learning}{{5}{2019}{{Hwangbo et~al.}}{{Hwangbo, Lee, Dosovitskiy, Bellicoso, Tsounis, Koltun, and Hutter}}}
-\bibcite{sutton1999options}{{6}{1999}{{Sutton et~al.}}{{Sutton, Precup, and Singh}}}
-\bibcite{bacon2017option}{{7}{2017}{{Bacon et~al.}}{{Bacon, Harb, and Precup}}}
+\@writefile{lot}{\contentsline {table}{\numberline {9}{\ignorespaces Paired component ablations on two seeds ($n=80$ per variant). Differences are against direct control in the same runs.}}{18}{table.9}\protected@file@percent }
+\newlabel{tab:vgfc-ablation}{{9}{18}{Paired component ablations on two seeds ($n=80$ per variant). Differences are against direct control in the same runs}{table.9}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {A.4}Complete VGFC Component Ablation}{18}{subsection.A.4}\protected@file@percent }
+\newlabel{app:ablation}{{A.4}{18}{Complete VGFC Component Ablation}{subsection.A.4}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {A.5}Secondary Task-Value and Ranking Planners}{18}{subsection.A.5}\protected@file@percent }
+\newlabel{app:secondary-planners}{{A.5}{18}{Secondary Task-Value and Ranking Planners}{subsection.A.5}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {10}{\ignorespaces Task value development audit (seeds 813 to 815, $n=48$/method).}}{18}{table.10}\protected@file@percent }
+\newlabel{tab:task-value-audit}{{10}{18}{Task value development audit (seeds 813 to 815, $n=48$/method)}{table.10}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {11}{\ignorespaces Fresh-seed episode-ranker audit ($n=39$/method).}}{18}{table.11}\protected@file@percent }
+\newlabel{tab:paired-ranker}{{11}{18}{Fresh-seed episode-ranker audit ($n=39$/method)}{table.11}{}}
+\bibcite{astrom2008feedback}{{6}{2008}{{{\r {A}}str{\"o}m and Murray}}{{}}}
+\bibcite{francis1976internal}{{7}{1976}{{Francis and Wonham}}{{}}}
 \bibcite{eysenbach2019diversity}{{8}{2019}{{Eysenbach et~al.}}{{Eysenbach, Gupta, Ibarz, and Levine}}}
-\bibcite{sharma2020dynamics}{{9}{2020}{{Sharma et~al.}}{{Sharma, Gu, Levine, Kumar, and Hausman}}}
+\bibcite{cully2015robots}{{9}{2015}{{Cully et~al.}}{{Cully, Clune, Tarapore, and Mouret}}}
 \bibcite{pertsch2020spirl}{{10}{2020}{{Pertsch et~al.}}{{Pertsch, Lee, and Lim}}}
-\bibcite{ajay2021opal}{{11}{2021}{{Ajay et~al.}}{{Ajay, Kumar, Agrawal, Levine, and Nachum}}}
-\bibcite{mouret2015illuminating}{{12}{2015}{{Mouret and Clune}}{{}}}
-\bibcite{cully2015robots}{{13}{2015}{{Cully et~al.}}{{Cully, Clune, Tarapore, and Mouret}}}
-\bibcite{pugh2016quality}{{14}{2016}{{Pugh et~al.}}{{Pugh, Soros, and Stanley}}}
-\bibcite{mittal2023orbit}{{15}{2023}{{Mittal et~al.}}{{Mittal, Yu, Yu, Liu, Rudin, Hoeller, Yuan, Singh, Guo, Mazhar, Mandlekar, Babich, State, Hutter, and Garg}}}
-\bibcite{schwarke2025rslrl}{{16}{2025}{{Schwarke et~al.}}{{Schwarke, Mittal, Rudin, Hoeller, and Hutter}}}
-\bibcite{nachum2018data}{{17}{2018}{{Nachum et~al.}}{{Nachum, Gu, Lee, and Levine}}}
-\bibcite{peng2022ase}{{18}{2022}{{Peng et~al.}}{{Peng, Guo, Halper, Levine, and Fidler}}}
-\@writefile{lot}{\contentsline {table}{\numberline {6}{\ignorespaces H1 humanoid, rough terrain (5 trials $\times $ 3 targets). The direct controller is saturated; the result demonstrates transfer stability, not improvement.}}{9}{table.6}\protected@file@percent }
-\newlabel{tab:h1}{{6}{9}{H1 humanoid, rough terrain (5 trials $\times $ 3 targets). The direct controller is saturated; the result demonstrates transfer stability, not improvement}{table.6}{}}
-\bibcite{silver2018residual}{{19}{2018}{{Silver et~al.}}{{Silver, Allen, Tenenbaum, and Kaelbling}}}
-\bibcite{johannink2019residual}{{20}{2019}{{Johannink et~al.}}{{Johannink, Bahl, Nair, Luo, Kumar, Loskyll, Ojea, Solowjow, and Levine}}}
-\bibcite{kumar2021rma}{{21}{2021}{{Kumar et~al.}}{{Kumar, Fu, Pathak, and Malik}}}
-\bibcite{margolis2022walk}{{22}{2022}{{Margolis and Agrawal}}{{}}}
-\bibcite{zhao2023learning}{{23}{2023}{{Zhao et~al.}}{{Zhao, Kumar, Levine, and Finn}}}
-\gdef \@abspage@last{10}
+\bibcite{deisenroth2011pilco}{{11}{2011}{{Deisenroth and Rasmussen}}{{}}}
+\bibcite{chua2018deep}{{12}{2018}{{Chua et~al.}}{{Chua, Calandra, McAllister, and Levine}}}
+\bibcite{janner2019trust}{{13}{2019}{{Janner et~al.}}{{Janner, Fu, Zhang, and Levine}}}
+\bibcite{hafner2020dream}{{14}{2020}{{Hafner et~al.}}{{Hafner, Lillicrap, Ba, and Norouzi}}}
+\bibcite{hansen2022temporal}{{15}{2022}{{Hansen et~al.}}{{Hansen, Wang, and Su}}}
+\bibcite{nagabandi2018neural}{{16}{2018}{{Nagabandi et~al.}}{{Nagabandi, Kahn, Fearing, and Levine}}}
+\bibcite{mayne2000constrained}{{17}{2000}{{Mayne et~al.}}{{Mayne, Rawlings, Rao, and Scokaert}}}
+\bibcite{falcone2007predictive}{{18}{2007}{{Falcone et~al.}}{{Falcone, Borrelli, Asgari, Tseng, and Hrovat}}}
+\bibcite{williams2018information}{{19}{2018}{{Williams et~al.}}{{Williams, Drews, Goldfain, Rehg, and Theodorou}}}
+\bibcite{kabzan2019learning}{{20}{2019}{{Kabzan et~al.}}{{Kabzan, Hewing, Liniger, and Zeilinger}}}
+\bibcite{dicarlo2018dynamic}{{21}{2018}{{Di~Carlo et~al.}}{{Di~Carlo, Wensing, Katz, Bledt, and Kim}}}
+\bibcite{hewing2020learning}{{22}{2020}{{Hewing et~al.}}{{Hewing, Wabersich, Menner, and Zeilinger}}}
+\bibcite{garone2017reference}{{23}{2017}{{Garone et~al.}}{{Garone, Di~Cairano, and Kolmanovsky}}}
+\bibcite{wabersich2021predictive}{{24}{2021}{{Wabersich and Zeilinger}}{{}}}
+\bibcite{he2024agile}{{25}{2024}{{He et~al.}}{{He, Zhang, Xiao, He, Liu, and Shi}}}
+\bibcite{kim2024koopman}{{26}{2024}{{Kim et~al.}}{{Kim, Han, Ravichandar, and Ha}}}
+\bibcite{sutton1999options}{{27}{1999}{{Sutton et~al.}}{{Sutton, Precup, and Singh}}}
+\bibcite{bacon2017option}{{28}{2017}{{Bacon et~al.}}{{Bacon, Harb, and Precup}}}
+\bibcite{sharma2020dynamics}{{29}{2020}{{Sharma et~al.}}{{Sharma, Gu, Levine, Kumar, and Hausman}}}
+\bibcite{ajay2021opal}{{30}{2021}{{Ajay et~al.}}{{Ajay, Kumar, Agrawal, Levine, and Nachum}}}
+\bibcite{peng2022ase}{{31}{2022}{{Peng et~al.}}{{Peng, Guo, Halper, Levine, and Fidler}}}
+\bibcite{mouret2015illuminating}{{32}{2015}{{Mouret and Clune}}{{}}}
+\bibcite{pugh2016quality}{{33}{2016}{{Pugh et~al.}}{{Pugh, Soros, and Stanley}}}
+\bibcite{nachum2018data}{{34}{2018}{{Nachum et~al.}}{{Nachum, Gu, Lee, and Levine}}}
+\bibcite{zhao2023learning}{{35}{2023}{{Zhao et~al.}}{{Zhao, Kumar, Levine, and Finn}}}
+\bibcite{silver2018residual}{{36}{2018}{{Silver et~al.}}{{Silver, Allen, Tenenbaum, and Kaelbling}}}
+\bibcite{johannink2019residual}{{37}{2019}{{Johannink et~al.}}{{Johannink, Bahl, Nair, Luo, Kumar, Loskyll, Ojea, Solowjow, and Levine}}}
+\bibcite{kumar2021rma}{{38}{2021}{{Kumar et~al.}}{{Kumar, Fu, Pathak, and Malik}}}
+\bibcite{margolis2022walk}{{39}{2022}{{Margolis and Agrawal}}{{}}}
+\bibcite{mittal2023orbit}{{40}{2023}{{Mittal et~al.}}{{Mittal, Yu, Yu, Liu, Rudin, Hoeller, Yuan, Singh, Guo, Mazhar, Mandlekar, Babich, State, Hutter, and Garg}}}
+\bibcite{schwarke2025rslrl}{{41}{2025}{{Schwarke et~al.}}{{Schwarke, Mittal, Rudin, Hoeller, and Hutter}}}
+\gdef \@abspage@last{20}

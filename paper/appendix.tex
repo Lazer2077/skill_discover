@@ -1,0 +1,110 @@
+\section{Secondary Experiments and Diagnostics}
+\label{app:secondary}
+
+This appendix retains material that is useful for diagnosis and reproducibility
+but is not required for the main claim: qualitative and per-target results, a
+retrieval-based alternative, and the complete component ablation.
+
+\subsection{Qualitative and Per-Target Results}
+\label{app:qualitative}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\linewidth]{ff_v4_harder_trajectories.png}
+\caption{XY paths on the eight harder targets (one evaluation seed, 10 trials per method). VGCC and direct control reach similar target neighborhoods.}
+\label{fig:traj}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\linewidth]{ff_v4_control_example.png}
+\caption{Selected paired episode illustrating rescue behavior. This example shows mechanism, not prevalence.}
+\label{fig:example}
+\end{figure}
+
+The selected example forecasts a posture-floor breach and activates rescue, but
+the aggregate residual failure mode is low-posture arrival. A symmetric
+posture-aware stopping rule did not improve success at $n=400$ per method; it
+instead spent the remaining budget attempting recovery. Individual examples must
+therefore not be interpreted as a success-rate effect; the aggregate evidence is
+in Tables~\ref{tab:physical-energy} and~\ref{tab:coverage}.
+
+Table~\ref{tab:pertarget} gives the per-target breakdown of the harder benchmark.
+The proxy reduction holds on seven of eight targets, but success differences change
+sign at $n=50$ per target, which is why we report aggregate success rather than a
+target-specific success effect.
+
+\begin{table}[h]
+\centering
+\caption{Per-target harder-target results (50 episodes per target and method), ordered by proxy reduction.}
+\label{tab:pertarget}
+\begin{tabular}{lccccccc}
+\toprule
+& \multicolumn{3}{c}{Effort proxy $\downarrow$} &
+\multicolumn{2}{c}{Success $\uparrow$} & \multicolumn{2}{c}{Final height (m)} \\
+\cmidrule(lr){2-4}\cmidrule(lr){5-6}\cmidrule(lr){7-8}
+Target & VGCC & direct & $\Delta$ & VGCC & direct & VGCC & direct \\
+\midrule
+$(0,1.25)$ & 1.815 & 2.083 & $-12.9\%$ & 0.940 & 0.980 & 0.340 & 0.351 \\
+$(1.75,-0.75)$ & 2.217 & 2.542 & $-12.8\%$ & 0.480 & 0.520 & 0.276 & 0.285 \\
+$(-1,0.75)$ & 1.861 & 2.122 & $-12.3\%$ & 1.000 & 1.000 & 0.358 & 0.367 \\
+$(0,-1.25)$ & 1.822 & 2.073 & $-12.1\%$ & 0.940 & 0.980 & 0.345 & 0.350 \\
+$(1.5,1)$ & 2.203 & 2.471 & $-10.8\%$ & 0.800 & 0.740 & 0.316 & 0.313 \\
+$(2,0)$ & 2.367 & 2.619 & $-9.6\%$ & 0.240 & 0.260 & 0.233 & 0.224 \\
+$(1,-1)$ & 2.028 & 2.240 & $-9.5\%$ & 0.980 & 0.960 & 0.355 & 0.349 \\
+$(-0.75,0)$ & 1.496 & 1.510 & $-0.9\%$ & 1.000 & 1.000 & 0.359 & 0.363 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Retrieval Alternative (VGSR)}
+\label{app:retrieval}
+\label{sec:retrieval}
+
+An earlier, nonparametric alternative to the response model retrieves reusable
+behavior chunks instead of predicting command responses. VGSR segments
+converged-policy rollouts into chunks, describes them by body-frame displacement,
+velocity, yaw, posture, effort proxy, stability, and smoothness, then
+novelty-filters and clusters them into a behavior archive. At deployment it
+retrieves a chunk by progress, state applicability, effort, stability, and utility,
+and blends the chunk velocity with the direct command only when a heuristic gate
+accepts it. Unlike VGCC, it can interpolate only inside archive support.
+
+On the original five-target protocol, VGSR matches VGCC's proxy level on the harder
+family (2.061 versus 2.073) but has 1.2\% terminations and lower final height. It
+\emph{increases} the proxy by 3.8\% on held-out directions and 4.4\% on H1, exactly
+the generalization the parametric model provides and the archive does not. In a
+separate five-seed harder-target aggregate it reduces the proxy by 7.8\% with
+success 0.785 versus 0.800. Removing its gate increases the proxy by more than
+50\%. Archive size is non-monotonic: the top 2,000 chunks improve success relative
+to all 3,904, while top-500 minimizes proxy at lower success. These coverage and
+curation dependencies motivate the parametric response model used by VGCC.
+
+\subsection{Complete VGCC Component Ablation}
+\label{app:ablation}
+
+\begin{table}[h]
+\centering
+\caption{Paired component ablations on two seeds ($n=80$ per variant). Differences are against direct control in the same runs.}
+\label{tab:vgcc-ablation}
+\begin{tabular}{lccc}
+\toprule
+Variant & $\Delta$ proxy $\downarrow$ & $\Delta$ success & Active steps \\
+\midrule
+VGCC (full) & $-12.2\%$ & $+0.012$ & 11.7 \\
+no annealing & $-12.2\%$ & $+0.013$ & 12.3 \\
+no viability gate & $-4.8\%$ & $-0.025$ & 8.9 \\
+no progress floor & $-19.6\%$ & $-0.037$ & 19.8 \\
+substitution ($\alpha=1$) & $-14.0\%$ & $-0.050$ & 16.3 \\
+25\% identification data & $-6.4\%$ & $-0.012$ & 10.7 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The gate keeps predicted savings inside the model's well-behaved posture regime;
+the progress floor limits behavioral drift; and bounded blending avoids the larger
+success cost of substitution. A quarter of the identification data retains
+displacement $R^2=0.92$ but reduces the cost-channel $R^2$ from 0.75 to 0.62,
+halving the realized proxy reduction. An absolute proxy margin fails across
+embodiments (it increases the H1 proxy by 13.5\%), so the relative margin in
+Eq.~\ref{eq:vgc-cost} is retained.

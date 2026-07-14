@@ -188,12 +188,18 @@ class IsaacEnvWrapper:
                 "base_ang_vel": np.zeros((n, 3)),
                 "joint_pos": np.zeros((n, 1)),
                 "joint_vel": np.zeros((n, 1)),
+                "joint_effort": np.zeros((n, 1)),
             }
 
         data = self._robot.data
         # root_pos_w includes env origins; subtract them so positions are
         # comparable across parallel envs.
         origins = self._to_numpy(self.env.unwrapped.scene.env_origins)
+        joint_effort = getattr(data, "applied_torque", None)
+        if joint_effort is None:
+            joint_effort = getattr(data, "computed_torque", None)
+        if joint_effort is None:
+            joint_effort = np.zeros_like(self._to_numpy(data.joint_vel))
         return {
             "base_pos": self._to_numpy(data.root_pos_w) - origins,
             "base_quat": self._to_numpy(data.root_quat_w),  # (w, x, y, z)
@@ -201,7 +207,22 @@ class IsaacEnvWrapper:
             "base_ang_vel": self._to_numpy(data.root_ang_vel_w),
             "joint_pos": self._to_numpy(data.joint_pos),
             "joint_vel": self._to_numpy(data.joint_vel),
+            "joint_effort": self._to_numpy(joint_effort),
         }
+
+    def get_robot_mass(self) -> float:
+        """Return total articulated mass for the first environment, in kg."""
+        if self._robot is None:
+            return float("nan")
+        masses = getattr(self._robot.data, "default_mass", None)
+        if masses is not None:
+            arr = self._to_numpy(masses)
+            return float(np.sum(arr[0] if arr.ndim > 1 else arr))
+        try:
+            arr = self._to_numpy(self._robot.root_physx_view.get_masses())
+            return float(np.sum(arr[0] if arr.ndim > 1 else arr))
+        except Exception:
+            return float("nan")
 
     def _find_robot_articulation(self) -> Optional[Any]:
         scene = getattr(self.env.unwrapped, "scene", None)

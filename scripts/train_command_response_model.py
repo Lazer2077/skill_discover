@@ -111,6 +111,7 @@ def main() -> None:
     if args.dataset:
         data = np.load(args.dataset)
         X, Y, G = data["X"], data["Y"], data["G"]
+        output_names = data["output_names"].tolist() if "output_names" in data else OUTPUT_NAMES
         skipped = 0
         args.horizon = int(data["horizon"]) if "horizon" in data else args.horizon
     else:
@@ -118,6 +119,7 @@ def main() -> None:
             raise ValueError("Provide --dataset or --online_action_set.")
         action_set = OnlineActionSet.load(args.online_action_set)
         X, Y, G, skipped = build_dataset(action_set, args.horizon, args.stride, cmd_lo, cmd_hi, args.command_tol)
+        output_names = OUTPUT_NAMES
     print(f"dataset: {X.shape[0]} samples, {X.shape[1]}-dim obs, {len(np.unique(G))} episode groups, "
           f"{skipped} windows skipped (command changed)")
 
@@ -191,7 +193,9 @@ def main() -> None:
     pred = pred_n * y_std + y_mean
     true = Y[test_mask]
     metrics: Dict[str, Dict[str, float]] = {}
-    for j, name in enumerate(OUTPUT_NAMES):
+    if len(output_names) != Y.shape[1]:
+        raise ValueError(f"{len(output_names)} output names for Y with {Y.shape[1]} columns")
+    for j, name in enumerate(output_names):
         err = pred[:, j] - true[:, j]
         ss_res = float(np.sum(err ** 2))
         ss_tot = float(np.sum((true[:, j] - true[:, j].mean()) ** 2))
@@ -207,7 +211,7 @@ def main() -> None:
         "hidden_dim": args.hidden_dim,
         "dropout": args.dropout,
         "obs_dim": int(X.shape[1]),
-        "output_names": OUTPUT_NAMES,
+        "output_names": output_names,
         "x_mean": x_mean,
         "x_std": x_std,
         "y_mean": y_mean,

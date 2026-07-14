@@ -40,6 +40,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--height_scan_slice", type=str, default="48:235",
                         help="Obs slice holding the height scan; heights are computed relative to terrain.")
     parser.add_argument("--height_scan_offset", type=float, default=0.5)
+    parser.add_argument(
+        "--include_stability_labels",
+        action="store_true",
+        help="Append max base tilt and max base angular speed over each response window.",
+    )
+    parser.add_argument(
+        "--include_mechanical_power_label",
+        action="store_true",
+        help="Append mean absolute joint mechanical power from simulator-applied torque.",
+    )
+    parser.add_argument(
+        "--include_transition_targets",
+        action="store_true",
+        help="Store the observation at the end of every response window for recursive macro-dynamics training.",
+    )
     parser.add_argument("--device", type=str, default="cuda:0")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--headless", action="store_true")
@@ -113,6 +128,8 @@ def main() -> None:
         jvel_buf = None
         pos_buf = None
         quat_buf = None
+        angvel_buf = None
+        mechanical_power_buf = None
         epid_buf = np.zeros((T, N), dtype=np.int64)
 
         for t in range(T):
@@ -136,11 +153,14 @@ def main() -> None:
                 jvel_buf = np.zeros((T, N, jv_dim), dtype=np.float32)
                 pos_buf = np.zeros((T, N, 3), dtype=np.float32)
                 quat_buf = np.zeros((T, N, 4), dtype=np.float32)
+                angvel_buf = np.zeros((T, N, 3), dtype=np.float32)
+                mechanical_power_buf = np.zeros((T, N), dtype=np.float32)
 
             state = state_reader.get_robot_state()
             obs_buf[t] = policy_obs_t.detach().cpu().numpy()
             pos_buf[t] = np.asarray(state["base_pos"], dtype=np.float32)
             quat_buf[t] = np.asarray(state["base_quat"], dtype=np.float32)
+            angvel_buf[t] = np.asarray(state["base_ang_vel"], dtype=np.float32)
             jvel_buf[t] = np.asarray(state["joint_vel"], dtype=np.float32)
             epid_buf[t] = episode_ids
 
@@ -159,6 +179,12 @@ def main() -> None:
             act_buf[t] = actions.detach().cpu().numpy()
 
             obs, _rew, dones, _extras = rl_env.step(actions)
+            if args.include_mechanical_power_label:
+                post_state = state_reader.get_robot_state()
+                tau = np.asarray(post_state["joint_effort"], dtype=np.float32)
+                qd = np.asarray(post_state["joint_vel"], dtype=np.float32)
+                m = min(tau.shape[-1], qd.shape[-1])
+                mechanical_power_buf[t] = np.sum(np.abs(tau[:, :m] * qd[:, :m]), axis=1)
             dones_np = np.asarray(dones.detach().cpu().numpy()).reshape(-1).astype(bool)
             if dones_np.any():
                 n_done = int(dones_np.sum())
@@ -172,7 +198,7 @@ def main() -> None:
 
         print("collection done; slicing windows...")
         H, S = args.horizon, args.stride
-        X_list, Y_list, G_list = [], [], []
+        X_list, Y_list, G_list, X_next_list, step_index_list, env_index_list = [], [], [], [], [], []
         for e in range(N):
             for t0 in range(0, T - H, S):
                 ep = epid_buf[t0, e]
@@ -197,18 +223,47 @@ def main() -> None:
                     obs_buf[t0 : t0 + H, e, sc_lo:sc_hi].mean(axis=1) + args.height_scan_offset
                 )
                 X_list.append(obs_buf[t0, e])
-                Y_list.append(
-                    np.asarray(
-                        [dx, dy, dyaw, energy, float(np.min(heights)), float(np.mean(heights))], dtype=np.float32
-                    )
-                )
+                if args.include_transition_targets:
+                    X_next_list.append(obs_buf[t0 + H, e])
+                response = [dx, dy, dyaw, energy, float(np.min(heights)), float(np.mean(heights))]
+                if args.include_stability_labels:
+                    q = quat_buf[t0 : t0 + H, e]
+                    # For q=(w,x,y,z), the world z component of body z is
+                    # 1 - 2(x^2+y^2); arccos gives tilt from upright.
+                    body_z_world_z = np.clip(1.0 - 2.0 * (q[:, 1] ** 2 + q[:, 2] ** 2), -1.0, 1.0)
+                    tilt = np.arccos(body_z_world_z)
+                    ang_speed = np.linalg.norm(angvel_buf[t0 : t0 + H, e], axis=1)
+                    response.extend([float(np.max(tilt)), float(np.max(ang_speed))])
+                if args.include_mechanical_power_label:
+                    response.append(float(np.mean(mechanical_power_buf[t0 : t0 + H, e])))
+                Y_list.append(np.asarray(response, dtype=np.float32))
                 G_list.append(int(ep))
+                step_index_list.append(int(t0))
+                env_index_list.append(int(e))
 
         X = np.stack(X_list)
         Y = np.stack(Y_list)
         G = np.asarray(G_list, dtype=np.int64)
         os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)
-        np.savez_compressed(args.output, X=X, Y=Y, G=G, horizon=H, command_slice=[cmd_lo, cmd_hi])
+        output_names = ["delta_x", "delta_y", "delta_yaw", "energy", "min_height", "mean_height"]
+        if args.include_stability_labels:
+            output_names.extend(["max_tilt", "max_ang_speed"])
+        if args.include_mechanical_power_label:
+            output_names.append("mechanical_power")
+        payload = {
+            "X": X,
+            "Y": Y,
+            "G": G,
+            "step_index": np.asarray(step_index_list, dtype=np.int64),
+            "env_index": np.asarray(env_index_list, dtype=np.int64),
+            "horizon": H,
+            "command_slice": [cmd_lo, cmd_hi],
+            "output_names": np.asarray(output_names),
+            "control_dt": float(rl_env.unwrapped.step_dt),
+        }
+        if args.include_transition_targets:
+            payload["X_next"] = np.stack(X_next_list)
+        np.savez_compressed(args.output, **payload)
         print(f"saved {X.shape[0]} samples ({len(np.unique(G))} episodes) to {args.output}", flush=True)
         # Isaac Sim app close can hang after headless multi-env runs; the dataset is
         # already on disk, so exit hard instead of risking a stuck process.
