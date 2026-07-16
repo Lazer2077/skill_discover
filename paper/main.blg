@@ -1,7 +1,48 @@
-This is BibTeX, Version 0.99d
-Capacity: max_strings=35307, hash_size=35307, hash_prime=30011
+This is BibTeX, Version 0.99d (TeX Live 2024)
+Capacity: max_strings=200000, hash_size=200000, hash_prime=170003
 The top-level auxiliary file: main.aux
 The style file: unsrtnat.bst
 Database file #1: references.bib
 Warning--can't use both volume and number fields in peng2022ase
+You've used 40 entries,
+            2481 wiz_defined-function locations,
+            770 strings with 12533 characters,
+and the built_in function-call counts, 17269 in all, are:
+= -- 1273
+> -- 1182
+< -- 16
++ -- 434
+- -- 354
+* -- 1413
+:= -- 2807
+add.period$ -- 137
+call.type$ -- 40
+change.case$ -- 79
+chr.to.int$ -- 40
+cite$ -- 41
+duplicate$ -- 862
+empty$ -- 1534
+format.name$ -- 406
+if$ -- 3635
+int.to.chr$ -- 1
+int.to.str$ -- 41
+missing$ -- 41
+newline$ -- 225
+num.names$ -- 120
+pop$ -- 391
+preamble$ -- 1
+purify$ -- 40
+quote$ -- 0
+skip$ -- 479
+stack$ -- 0
+substring$ -- 575
+swap$ -- 150
+text.length$ -- 10
+text.prefix$ -- 0
+top$ -- 0
+type$ -- 277
+warning$ -- 1
+while$ -- 119
+width$ -- 0
+write$ -- 545
 (There was 1 warning)

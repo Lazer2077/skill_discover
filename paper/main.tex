@@ -259,9 +259,22 @@ frozen policy--robot closed loop from its command interface
 (Section~\ref{sec:model}): a supervised command-response model fit to the policy's
 own excitation rollouts. Built on it is one \emph{application}, an online
 compensator (Section~\ref{sec:vgcc}) that uses the model to decide, at each step,
-between the proportional command and a nominally efficient scaled command. We
-present identification first because it is the reusable object; the compensator is
-the concrete use through which we test the model.
+between the proportional command and a nominally efficient scaled command
+(Figure~\ref{fig:method}). We present identification first because it is the
+reusable object; the compensator is the concrete use through which we test the
+model.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{vgfc_method.png}
+\caption{VGCC overview. Offline excitation rollouts from the frozen
+policy--robot closed loop train an observation-conditioned response model.
+Online, the model scores the direct and nominally scaled commands; the
+priority-ordered gate restores or rescues posture, compensates only when the
+progress, posture, and cost criteria pass, and otherwise uses the exact direct
+fallback.}
+\label{fig:method}
+\end{figure}
 
 \textbf{Design requirements.}
 Three requirements shape both parts.

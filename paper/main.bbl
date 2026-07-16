@@ -1,48 +1,9 @@
-\begin{thebibliography}{41}
+\begin{thebibliography}{40}
 \providecommand{\natexlab}[1]{#1}
 \providecommand{\url}[1]{\texttt{#1}}
 \expandafter\ifx\csname urlstyle\endcsname\relax
   \providecommand{\doi}[1]{doi: #1}\else
   \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
-
-\bibitem[Rudin et~al.(2022)Rudin, Hoeller, Reist, and
-  Hutter]{rudin2022learning}
-Nikita Rudin, David Hoeller, Philipp Reist, and Marco Hutter.
-\newblock Learning to walk in minutes using massively parallel deep
-  reinforcement learning.
-\newblock In \emph{Conference on Robot Learning (CoRL)}, pages 91--100, 2022.
-\newblock arXiv:2109.11978.
-
-\bibitem[Makoviychuk et~al.(2021)Makoviychuk, Wawrzyniak, Guo, Lu, Storey,
-  Macklin, Hoeller, Rudin, Allshire, Handa, and State]{makoviychuk2021isaac}
-Viktor Makoviychuk, Lukasz Wawrzyniak, Yunrong Guo, Michelle Lu, Kier Storey,
-  Miles Macklin, David Hoeller, Nikita Rudin, Arthur Allshire, Ankur Handa, and
-  Gavriel State.
-\newblock Isaac {Gym}: High performance {GPU} based physics simulation for
-  robot learning.
-\newblock In \emph{NeurIPS Datasets and Benchmarks Track}, 2021.
-\newblock arXiv:2108.10470.
-
-\bibitem[Lee et~al.(2020)Lee, Hwangbo, Wellhausen, Koltun, and
-  Hutter]{lee2020learning}
-Joonho Lee, Jemin Hwangbo, Lorenz Wellhausen, Vladlen Koltun, and Marco Hutter.
-\newblock Learning quadrupedal locomotion over challenging terrain.
-\newblock \emph{Science Robotics}, 5\penalty0 (47):\penalty0 eabc5986, 2020.
-
-\bibitem[Miki et~al.(2022)Miki, Lee, Hwangbo, Wellhausen, Koltun, and
-  Hutter]{miki2022learning}
-Takahiro Miki, Joonho Lee, Jemin Hwangbo, Lorenz Wellhausen, Vladlen Koltun,
-  and Marco Hutter.
-\newblock Learning robust perceptive locomotion for quadrupedal robots in the
-  wild.
-\newblock \emph{Science Robotics}, 7\penalty0 (62):\penalty0 eabk2822, 2022.
-
-\bibitem[Hwangbo et~al.(2019)Hwangbo, Lee, Dosovitskiy, Bellicoso, Tsounis,
-  Koltun, and Hutter]{hwangbo2019learning}
-Jemin Hwangbo, Joonho Lee, Alexey Dosovitskiy, Dario Bellicoso, Vassilios
-  Tsounis, Vladlen Koltun, and Marco Hutter.
-\newblock Learning agile and dynamic motor skills for legged robots.
-\newblock \emph{Science Robotics}, 4\penalty0 (26):\penalty0 eaau5872, 2019.
 
 \bibitem[{\r{A}}str{\"o}m and Murray(2008)]{astrom2008feedback}
 Karl~Johan {\r{A}}str{\"o}m and Richard~M. Murray.
@@ -54,25 +15,6 @@ Karl~Johan {\r{A}}str{\"o}m and Richard~M. Murray.
 Bruce~A. Francis and W.~Murray Wonham.
 \newblock The internal model principle of control theory.
 \newblock \emph{Automatica}, 12\penalty0 (5):\penalty0 457--465, 1976.
-
-\bibitem[Eysenbach et~al.(2019)Eysenbach, Gupta, Ibarz, and
-  Levine]{eysenbach2019diversity}
-Benjamin Eysenbach, Abhishek Gupta, Julian Ibarz, and Sergey Levine.
-\newblock Diversity is all you need: Learning skills without a reward function.
-\newblock In \emph{International Conference on Learning Representations
-  (ICLR)}, 2019.
-\newblock arXiv:1802.06070.
-
-\bibitem[Cully et~al.(2015)Cully, Clune, Tarapore, and Mouret]{cully2015robots}
-Antoine Cully, Jeff Clune, Danesh Tarapore, and Jean-Baptiste Mouret.
-\newblock Robots that can adapt like animals.
-\newblock \emph{Nature}, 521\penalty0 (7553):\penalty0 503--507, 2015.
-
-\bibitem[Pertsch et~al.(2020)Pertsch, Lee, and Lim]{pertsch2020spirl}
-Karl Pertsch, Youngwoon Lee, and Joseph~J. Lim.
-\newblock Accelerating reinforcement learning with learned skill priors.
-\newblock In \emph{Conference on Robot Learning (CoRL)}, 2020.
-\newblock arXiv:2010.11944.
 
 \bibitem[Deisenroth and Rasmussen(2011)]{deisenroth2011pilco}
 Marc~Peter Deisenroth and Carl~Edward Rasmussen.
@@ -204,6 +146,14 @@ Pierre-Luc Bacon, Jean Harb, and Doina Precup.
 \newblock In \emph{Proceedings of the AAAI Conference on Artificial
   Intelligence}, volume~31, 2017.
 
+\bibitem[Eysenbach et~al.(2019)Eysenbach, Gupta, Ibarz, and
+  Levine]{eysenbach2019diversity}
+Benjamin Eysenbach, Abhishek Gupta, Julian Ibarz, and Sergey Levine.
+\newblock Diversity is all you need: Learning skills without a reward function.
+\newblock In \emph{International Conference on Learning Representations
+  (ICLR)}, 2019.
+\newblock arXiv:1802.06070.
+
 \bibitem[Sharma et~al.(2020)Sharma, Gu, Levine, Kumar, and
   Hausman]{sharma2020dynamics}
 Archit Sharma, Shixiang Gu, Sergey Levine, Vikash Kumar, and Karol Hausman.
@@ -211,6 +161,12 @@ Archit Sharma, Shixiang Gu, Sergey Levine, Vikash Kumar, and Karol Hausman.
 \newblock In \emph{International Conference on Learning Representations
   (ICLR)}, 2020.
 \newblock arXiv:1907.01657.
+
+\bibitem[Pertsch et~al.(2020)Pertsch, Lee, and Lim]{pertsch2020spirl}
+Karl Pertsch, Youngwoon Lee, and Joseph~J. Lim.
+\newblock Accelerating reinforcement learning with learned skill priors.
+\newblock In \emph{Conference on Robot Learning (CoRL)}, 2020.
+\newblock arXiv:2010.11944.
 
 \bibitem[Ajay et~al.(2021)Ajay, Kumar, Agrawal, Levine, and
   Nachum]{ajay2021opal}
@@ -232,6 +188,11 @@ Xue~Bin Peng, Yunrong Guo, Lina Halper, Sergey Levine, and Sanja Fidler.
 Jean-Baptiste Mouret and Jeff Clune.
 \newblock Illuminating search spaces by mapping elites.
 \newblock \emph{arXiv preprint arXiv:1504.04909}, 2015.
+
+\bibitem[Cully et~al.(2015)Cully, Clune, Tarapore, and Mouret]{cully2015robots}
+Antoine Cully, Jeff Clune, Danesh Tarapore, and Jean-Baptiste Mouret.
+\newblock Robots that can adapt like animals.
+\newblock \emph{Nature}, 521\penalty0 (7553):\penalty0 503--507, 2015.
 
 \bibitem[Pugh et~al.(2016)Pugh, Soros, and Stanley]{pugh2016quality}
 Justin~K. Pugh, Lisa~B. Soros, and Kenneth~O. Stanley.
@@ -277,6 +238,24 @@ Gabriel~B. Margolis and Pulkit Agrawal.
 \newblock In \emph{Conference on Robot Learning (CoRL)}, 2022.
 \newblock arXiv:2212.03238.
 
+\bibitem[Rudin et~al.(2022)Rudin, Hoeller, Reist, and
+  Hutter]{rudin2022learning}
+Nikita Rudin, David Hoeller, Philipp Reist, and Marco Hutter.
+\newblock Learning to walk in minutes using massively parallel deep
+  reinforcement learning.
+\newblock In \emph{Conference on Robot Learning (CoRL)}, pages 91--100, 2022.
+\newblock arXiv:2109.11978.
+
+\bibitem[Makoviychuk et~al.(2021)Makoviychuk, Wawrzyniak, Guo, Lu, Storey,
+  Macklin, Hoeller, Rudin, Allshire, Handa, and State]{makoviychuk2021isaac}
+Viktor Makoviychuk, Lukasz Wawrzyniak, Yunrong Guo, Michelle Lu, Kier Storey,
+  Miles Macklin, David Hoeller, Nikita Rudin, Arthur Allshire, Ankur Handa, and
+  Gavriel State.
+\newblock Isaac {Gym}: High performance {GPU} based physics simulation for
+  robot learning.
+\newblock In \emph{NeurIPS Datasets and Benchmarks Track}, 2021.
+\newblock arXiv:2108.10470.
+
 \bibitem[Mittal et~al.(2023)Mittal, Yu, Yu, Liu, Rudin, Hoeller, Yuan, Singh,
   Guo, Mazhar, Mandlekar, Babich, State, Hutter, and Garg]{mittal2023orbit}
 Mayank Mittal, Calvin Yu, Qinxi Yu, Jingzhou Liu, Nikita Rudin, David Hoeller,
@@ -293,5 +272,19 @@ Mayank Mittal, Calvin Yu, Qinxi Yu, Jingzhou Liu, Nikita Rudin, David Hoeller,
 Clemens Schwarke, Mayank Mittal, Nikita Rudin, David Hoeller, and Marco Hutter.
 \newblock {RSL-RL}: A learning library for robotics research.
 \newblock \emph{arXiv preprint arXiv:2509.10771}, 2025.
+
+\bibitem[Lee et~al.(2020)Lee, Hwangbo, Wellhausen, Koltun, and
+  Hutter]{lee2020learning}
+Joonho Lee, Jemin Hwangbo, Lorenz Wellhausen, Vladlen Koltun, and Marco Hutter.
+\newblock Learning quadrupedal locomotion over challenging terrain.
+\newblock \emph{Science Robotics}, 5\penalty0 (47):\penalty0 eabc5986, 2020.
+
+\bibitem[Miki et~al.(2022)Miki, Lee, Hwangbo, Wellhausen, Koltun, and
+  Hutter]{miki2022learning}
+Takahiro Miki, Joonho Lee, Jemin Hwangbo, Lorenz Wellhausen, Vladlen Koltun,
+  and Marco Hutter.
+\newblock Learning robust perceptive locomotion for quadrupedal robots in the
+  wild.
+\newblock \emph{Science Robotics}, 7\penalty0 (62):\penalty0 eabk2822, 2022.
 
 \end{thebibliography}
