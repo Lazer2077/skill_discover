@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(lsblk)",
+      "Bash(sudo fdisk -l)",
+      "Bash(lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT)",
+      "Bash(sudo blkid)",
+      "Bash(file -s /dev/nvme0n1p3 /dev/nvme1n1p1 2>&1)",
+      "Read(//dev/**)",
+      "Bash(mkdir -p /mnt/storage)",
+      "Bash(sudo mount /dev/nvme1n1p1 /mnt/storage)",
+      "Bash(mkdir -p ~/storage)",
+      "Bash(sudo mount /dev/nvme1n1p1 ~/storage)"
+    ],
+    "additionalDirectories": [
+      "/mnt",
+      "/home/thing1"
+    ]
+  }
+}

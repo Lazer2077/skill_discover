@@ -19,8 +19,8 @@
 
 \graphicspath{{figures/}}
 
-\title{Viability-Gated Command Compensation for Frozen Locomotion Policies}
-\renewcommand{\shorttitle}{Viability-Gated Command Compensation}
+\title{Closed-Loop Command-Response Identification of Frozen Locomotion Policies}
+\renewcommand{\shorttitle}{Command-Response Identification of Frozen Policies}
 
 \author{
   Zongtan Li \\
@@ -33,85 +33,95 @@
 \maketitle
 
 \begin{abstract}
-We present \textbf{Viability-Gated Command Compensation} (VGCC), a training-free
-controller that improves a frozen, command-conditioned locomotion policy without
-touching its weights, reward, or low-level feedback. A task is normally layered
-on such a policy by driving it straight at the goal with a proportional velocity
-command; this is a strong baseline, but a wasteful one, because it always
-requests the fastest local motion even where a gentler command would reach the
-goal just as well. VGCC identifies the frozen policy--robot closed loop directly
-from the command interface: an offline supervised model predicts, for any
-candidate command, the local motion it produces, its mechanical cost, and the
-terrain-relative posture it leaves the robot in. Online, VGCC compares a
-nominally efficient scaled command against the direct command and executes the
-scaled one only when the model certifies that it preserves task progress and
-posture at lower cost per unit progress; otherwise it falls back to the direct
-command \emph{exactly}. The learned viability gate and exact fallback are what
-let a single configuration transfer across the command space and across
-embodiments, including a humanoid on which an ungated fixed command scale
-collapses posture. On Isaac Lab rough-terrain target reaching, VGCC lowers the
-optimized running cost by $4$--$10\%$ across eight command directions and three
-robots (Go2, ANYmal-D, H1) with no observed aggregate success loss, and a
-torque-derived evaluation links this to reduced simulated mechanical work and
-cost of transport. We compare against a tuned fixed command scale and a reactive
-governor as explicit baselines, report simulated mechanical quantities, and
-frame the remaining gap to a hardware electrical-energy claim explicitly.
+Learned locomotion policies are increasingly deployed as frozen,
+command-conditioned building blocks, driven to tasks through a velocity-command
+interface. We ask what can be learned about such a policy from that interface alone,
+without its weights, reward, or retraining, and what that knowledge is worth. We
+identify the frozen closed loop of policy and robot from excitation rollouts: a
+data-efficient model predicts, for any command in the current situation, the motion
+it produces, its mechanical cost, and the terrain-relative posture it leaves the
+robot in (displacement $R^2\ge0.92$, posture $R^2\approx0.9$, cost
+$R^2\approx0.75$ to $0.8$, from about a minute of simulation; terrain-relative posture
+labels are essential). We use the model in two modes. As a controller, a
+training-free viability-gated compensator lowers the deployed policy's running cost
+and mechanical work across three embodiments (Go2, ANYmal-D, H1). As a measurement,
+it lets us bound the efficiency available at the command interface: from identical
+initial states, an omniscient per-state oracle beats the best single fixed command
+scale by under $2\%$, because the interface exposes almost no state-dependent
+efficiency structure. No learned per-state controller, ours or a heavier sampling
+MPC, clears that ceiling. Command-level efficiency compensation of a frozen
+locomotion policy therefore has a low and measurable ceiling; the contributions are
+the identification method that exposes it and the evaluation that measures it.
 \end{abstract}
 
-\keywords{policy compensation \and command-interface control \and learned dynamics models \and continuous control \and legged locomotion}
+\keywords{closed-loop system identification \and frozen policies \and command-interface control \and learned dynamics models \and legged locomotion}
 
 \section{Introduction}
 \label{sec:intro}
 
-Strong learned locomotion policies are commonly deployed through a velocity
-command interface. The interface is attractive for post-training improvement: it
-leaves the policy's contact-level feedback intact, yet the same target can often
-be approached by commands with different speed, work, and posture consequences.
-A direct proportional command, however, always requests the fastest local
-motion. It therefore spends unnecessary effort on terrain where a slower command
-remains viable, and near the goal it produces energy-intensive in-place
-stepping. Retraining the policy or modifying its low-level actions is expensive
-and can regress useful behavior.
+Strong learned locomotion policies are increasingly deployed as frozen,
+command-conditioned building blocks: a task layer drives a pretrained
+velocity-tracking policy toward a goal through its command interface, typically with
+a hand-designed proportional command. In this common regime the policy's weights,
+reward, and training pipeline are unavailable or too costly to touch; the only thing
+one can freely do is \emph{observe the policy acting} and choose what command to
+send next. This raises a question that is logically prior to any attempt to improve
+such a policy: what can be identified about a frozen policy purely from its command
+interface, and what does that knowledge buy?
 
-We address this setting with \textbf{Viability-Gated Command Compensation}
-(VGCC). The controller makes one deliberately narrow decision at every high-level
-step: apply a nominally efficient scale of the direct command, or retain direct
-control. To make that decision it first identifies the short-horizon command
-response of the frozen policy and robot from excitation rollouts. The scaled
-command is accepted only when the model predicts that posture stays viable and
-progress stays close to direct control at lower cost; otherwise VGCC executes the
-unmodified direct command. This turns command shaping from an unconditional
-heuristic into a model-gated controller with an exact fallback.
+Our first contribution is a method that answers the identification half directly. We
+excite the frozen policy--robot closed loop with commands sampled across its
+admissible range and fit a supervised model that predicts, for any candidate command
+in the current situation, the short-horizon motion it produces, its mechanical cost,
+and the terrain-relative posture it leaves the robot in. Modeling the \emph{closed
+loop} at the command interface, rather than the robot's action-level dynamics as in
+model-based RL, keeps the input three-dimensional and makes identification a cheap
+supervised problem on the policy's own rollouts. The resulting model is accurate and
+data-efficient, and we isolate one ingredient that is essential rather than
+incidental: posture must be labeled in terrain-relative coordinates, without which
+its predictability collapses on rough ground.
 
-The restriction to a small, deliberately structured candidate set is what makes
-the method both cheap and safe, and it is the outcome of a specific design
-critique. A fixed command scale is the obvious efficiency heuristic, and on a
-single robot a well-tuned scale is a strong baseline; but it is open-loop. It
-slows the robot everywhere, pays a large completion-time penalty, must be
-re-tuned per robot, and---as we show on a humanoid---can drive a tall, high-inertia
-body into posture collapse on exactly the long targets where slowing down looks
-most attractive. VGCC keeps the efficiency of scaling where it is safe and
-reverts to the strong direct baseline where it is not, using a learned model to
-tell the two situations apart. Three design choices make this precise and
-distinguish VGCC from a naive scaling heuristic: it scores the command that will
-\emph{actually} be executed rather than an idealized candidate; it optimizes a
-cost-per-progress objective so that slowing down is only rewarded when it does
-not simply trade energy for time; and it gates on terrain-relative posture rather
-than raw command magnitude.
+The identified model is a reusable lens on the frozen policy, and we put it to work
+in two modes. The first is \emph{control}. We build
+\textbf{Viability-Gated Command Compensation} (VGCC), a training-free controller that
+at each step uses the model to decide between the proportional command and a
+nominally efficient scaled command, accepting the scaled command only where the model
+certifies that it preserves task progress and terrain-relative posture, and otherwise
+falling back to the proportional command exactly. Across three embodiments a single
+configuration reduces the deployed policy's running cost and mechanical work below the
+proportional baseline it is layered on, without reward access, retraining, or changes
+to the low-level feedback.
+
+The second mode, and the one that raises this work from a controller to a statement
+about the policy, is \emph{measurement}. Because the model predicts the situational
+cost of every command, it lets us ask a question that logically precedes any
+controller: how much efficiency is there to gain at the command interface at all? We
+answer it against ground truth. From identical initial states we trace the
+cost-of-transport--time frontier of command-level efficiency and bound it with an
+omniscient per-state oracle and a same-budget sampling MPC. The finding is sharp: the
+frontier is \emph{narrow}. A single tuned fixed command scale lies within $2\%$ of an
+oracle that picks the best scale for every state, because the policy's command
+interface exposes almost no state-dependent efficiency structure, and no learned
+per-state gate, VGCC or a heavier MPC, clears that ceiling. This reframes a growing
+family of methods that improve frozen policies at the command interface: for
+\emph{efficiency} on rough-terrain locomotion, the achievable gain over a well-chosen
+fixed command is bounded and small, and the identification method is precisely the
+instrument that measures that bound before one invests in a controller.
 
 \textbf{Contributions.}
-(1)~VGCC, a training-free command controller that combines a nominally efficient
-command scale with predictive progress and posture gating and an exact direct
-fallback, so that a single configuration is safe to deploy across the command
-space and across embodiments.
-(2)~An execution-aligned command-response model that predicts, for the command
-actually sent to the frozen policy, its local motion, terrain-relative posture,
-and a torque-derived mechanical cost.
-(3)~An evaluation across three embodiments and four command families that reports
-the optimized running cost together with torque-derived mechanical work,
-cost of transport, completion time, and success, against direct control, a tuned
-fixed command scale, and a reactive governor, with tuning and confirmation seeds
-separated in advance.
+(1)~A method for closed-loop command-response identification of a frozen,
+command-conditioned policy from excitation rollouts: a data-efficient model
+predicting situational motion, mechanical cost, and terrain-relative posture, with
+terrain-relative posture labels shown to be necessary.
+(2)~VGCC, a training-free compensator built on the identified model, that robustly
+improves the deployed proportional baseline across three embodiments (Go2, ANYmal-D,
+H1) with one configuration and an exact fallback.
+(3)~A measurement, enabled by the identified model and validated against ground
+truth: through paired, iso-time, oracle, and same-budget-MPC analyses we show that
+the cost-of-transport frontier of command-level efficiency is narrow: a tuned fixed
+command scale lies within $2\%$ of an omniscient per-state oracle, which bounds what
+\emph{any} command-level efficiency controller, learned or not, can buy on this
+policy class.
 
 \section{Related Work}
 \label{sec:related}
@@ -188,11 +198,18 @@ policy in the loop, for MPC-based safe navigation; VGCC likewise identifies the
 closed loop at the command level, but with an observation-conditioned nonlinear
 model whose terrain-dependent cost and posture channels have no linear
 lifted-state analogue, and uses it for compensation rather than navigation.
-To our knowledge, the specific combination that VGCC instantiates---post-hoc
+To our knowledge, the specific combination that VGCC instantiates (post-hoc
 identification of a frozen policy's situational command response, running-cost
 optimization at matched predicted progress, and a learned predictive viability
-gate behind a bounded correction with exact fallback---has not previously been
+gate behind a bounded correction with exact fallback) has not previously been
 reported, although each constituent mechanism has established antecedents.
+More important than the controller, and unlike these prior systems, is how we use
+the identified model: not only to \emph{act} on the policy but to \emph{measure} a
+property of it: the state-dependent efficiency headroom its command interface
+exposes. Where prior closed-loop identifications are means to a control end, we treat
+identification as an instrument that returns a boundary result about the achievable
+frontier of command-level compensation, which is the contribution we most want to
+transfer.
 
 \textbf{Options, skills, and behavior archives.}
 Temporal-abstraction research builds libraries of reusable behaviors:
@@ -237,23 +254,26 @@ correction exist to prevent.
 \section{Method}
 \label{sec:method}
 
-VGCC has an offline \emph{identification} phase and an online \emph{compensation}
-phase. Identification fits a command-response model to the frozen policy's own
-excitation rollouts. At deployment, VGCC compares a nominally scaled command and
-the direct command and executes the scale only when the model certifies its local
-progress, cost, and posture.
+The method has two parts. The core is an offline \emph{identification} of the
+frozen policy--robot closed loop from its command interface
+(Section~\ref{sec:model}): a supervised command-response model fit to the policy's
+own excitation rollouts. Built on it is one \emph{application}, an online
+compensator (Section~\ref{sec:vgcc}) that uses the model to decide, at each step,
+between the proportional command and a nominally efficient scaled command. We
+present identification first because it is the reusable object; the compensator is
+the concrete use through which we test the model.
 
 \textbf{Design requirements.}
-Three requirements shape every design decision that follows.
-\emph{R1, no retraining}: the compensator must improve a policy whose weights,
-reward, and training pipeline are unavailable or too expensive to touch; it may
-only observe the policy acting.
-\emph{R2, non-degradation}: the pretrained policy is already strong, so the
-compensator must be able to revert to it exactly, and every intervention must be
-rejected when its predicted benefit is uncertain.
-\emph{R3, embodiment generality}: nothing in the method may depend on
-robot-specific knowledge beyond what can be identified automatically from the
-policy's own rollouts.
+Three requirements shape both parts.
+\emph{R1, no retraining}: everything must be obtained by only \emph{observing the
+policy acting}, since its weights, reward, and training pipeline are unavailable or
+too expensive to touch.
+\emph{R2, non-degradation}: any controller built on the model must be able to revert
+to the strong pretrained policy exactly, and reject its own intervention when the
+predicted benefit is uncertain.
+\emph{R3, embodiment generality}: nothing may depend on robot-specific knowledge
+beyond what the identification recovers automatically from the policy's own
+rollouts.
 The architecture has a command interface (where to intervene,
 Section~\ref{sec:setting}), a response model (what to know,
 Section~\ref{sec:model}), and a viability gate (how to act,
@@ -344,7 +364,7 @@ excitation applied to the policy--robot closed loop.
 Crucially, \emph{no quality filtering is applied}: stumbles, slips, and low-posture
 episodes are kept, because the model must know where the policy performs poorly.
 Filtering to high-quality segments is a natural shortcut and an actively harmful
-one---a model trained only on clean behavior cannot warn the gate about the sloppy
+one: a model trained only on clean behavior cannot warn the gate about the sloppy
 behavior it must avoid (Section~\ref{sec:results-model}).
 
 \textbf{Response targets.}
@@ -423,12 +443,12 @@ scaled command may slow the robot down: with $\beta=0.9$, an accepted command mu
 advance at least $90\%$ as fast as direct control within the horizon, capping the
 instantaneous slowdown at roughly $10\%$. This constraint is the mechanism that
 keeps VGCC from collapsing into the trivial ``just walk slower'' solution, and
-Section~\ref{sec:results-slowdown} shows empirically that removing it does exactly
+Section~\ref{sec:results-baselines} shows empirically that removing it does exactly
 that.
 
 \textbf{Cost-per-progress objective.}
 With a fixed horizon duration, $\hat C(c)/\max(\hat G(c),\eta)$ is a local
-cost-per-progress score---predicted mechanical work per unit of task progress, a
+cost-per-progress score, predicted mechanical work per unit of task progress, a
 cost-of-transport surrogate. Optimizing this rather than instantaneous cost is the
 second half of the same guard: instantaneous power can always be lowered by
 commanding a slower gait, but that trades energy for time at an unchanged
@@ -442,7 +462,7 @@ progress by a margin,
 \end{equation}
 and otherwise executes $c_d$ exactly. The two constraints together admit an
 intervention only when it is both no more than marginally slower \emph{and}
-cheaper per meter---that is, a genuine efficiency gain within a bounded slowdown,
+cheaper per meter: a genuine efficiency gain within a bounded slowdown,
 not a slowdown dressed up as one.
 
 \textbf{Posture rescue and restore.}
@@ -482,18 +502,28 @@ planning over a long horizon, is a deliberate choice. The response model is
 reliable for the local, near-stationary consequences of a command
 (Section~\ref{sec:results-model}) but not for ranking many subtly different
 candidates or for compounding predictions over a long horizon. The two-command
-comparison uses the model only where it is trustworthy---to decide whether a known
-efficient operating point is appropriate right now---and leans on the exact
+comparison uses the model only where it is trustworthy, to decide whether a known
+efficient operating point is appropriate right now, and leans on the exact
 fallback everywhere else.
 
 \section{Experiments}
 \label{sec:results}
 
-The experiments ask three questions: whether VGCC reliably reduces its optimized
-running cost on a strong frozen policy without losing success; whether that
-reduction corresponds to lower simulated mechanical work relative to direct
-control and to a tuned fixed command scale; and whether a single configuration
-generalizes across the command space and across embodiments.
+The experiments follow the structure of the method. \textbf{Q1 (identification,
+the main result)}: how accurately and how cheaply can the closed-loop command
+response be identified, and what labeling makes it work
+(Section~\ref{sec:results-model})? \textbf{Q2 (application)}: does a compensator
+built on the identified model improve the deployed proportional baseline, and does a
+single configuration transfer across the command space and across embodiments
+(Sections~\ref{sec:results-main} and~\ref{sec:results-coverage})? \textbf{Q3
+(the boundary, and the paper's central finding)}: how does the compensator compare to
+the strongest simple alternatives (a per-robot-tuned fixed command scale, a reactive
+governor, and a same-budget sampling MPC), and, underneath those comparisons, how much
+state-dependent efficiency structure does the command interface expose at all
+(Sections~\ref{sec:results-baselines}--\ref{sec:results-headroom})? Q1 establishes the
+method; Q2 shows what the identified model lets us \emph{do}; Q3 shows what it lets us
+\emph{conclude}. The conclusion, that a tuned fixed scale is within $2\%$ of an
+omniscient per-state oracle, is the result we consider most important.
 
 \subsection{Setup}
 \label{sec:setup}
@@ -569,7 +599,7 @@ establish equivalence or noninferiority; paired seed-level differences are
 reported separately, and success comparisons are phrased as ``no observed
 aggregate loss'' rather than as proof of equality.
 
-\subsection{Response-Model Quality}
+\subsection{Identifying the Command Response}
 \label{sec:results-model}
 
 Table~\ref{tab:model} reports held-out episode test metrics for the Go2 response
@@ -616,7 +646,7 @@ min.\ height, world-frame labels & 0.039 & 0.092 & 0.247 \\
 \end{tabular}
 \end{table}
 
-\subsection{Main Result: Go2 Harder Targets}
+\subsection{Compensation on Go2}
 \label{sec:results-main}
 
 The harder-target benchmark comprises eight targets evaluated over 5 seeds
@@ -676,103 +706,134 @@ Cost of transport & 0.754 & 0.805 & $-6.3\%$ \\
 \end{tabular}
 \end{table}
 
-\subsection{Strong Baselines: Fixed Scaling and a Reactive Governor}
+\subsection{Strong Baselines}
 \label{sec:results-baselines}
 
 A tuned fixed command scale is the simplest efficiency heuristic and a demanding
-baseline, so we compare against it directly on a locked three-seed evaluation
-using the torque-derived power channel (Table~\ref{tab:objective-audit}). We
-report VGCC under both cost channels---the effort proxy and mechanical power---to
-show the comparison is not an artifact of which channel is optimized.
+baseline. We compare against it, a reactive governor, and direct control on a locked
+six-seed evaluation with the torque-derived power channel. Every method is evaluated
+from \emph{identical} initial states (paired resets) so the comparison is
+within-condition, and VGCC is shown under both cost channels, the effort proxy and
+mechanical power, so the result does not depend on which channel is optimized
+(Table~\ref{tab:objective-audit}, Figure~\ref{fig:frontier}). We include two fixed
+scales: $0.90$ closely matches VGCC's completion time and is the sharpest iso-time
+competitor, and $0.75$ traces the slow, low-COT end of the frontier.
 
-The result sharpens the paper's claim rather than inflating it. Both VGCC channels
-reduce instantaneous mechanical power relative to direct control ($-8\%$ and
-$-9\%$), but their $14\%$ longer episodes leave total work and COT no better than
-direct on these seeds. The mechanical-work reduction in
-Table~\ref{tab:physical-energy} is therefore configuration- and seed-dependent: it
-appears in the main configuration but not under re-identification here, which is
-exactly why we do not claim a robust mechanical-energy advantage over the
-baselines. Fixed $0.75$ scaling attains the lowest COT of all methods,
-but at a $40\%$ completion-time penalty, and it requires choosing a global scale
-in advance. In other words, on a single robot with a weakly constrained deadline,
-a well-tuned fixed scale is a strong---often the strongest---baseline on COT. VGCC
-is not proposed as a universal COT winner over that baseline; its advantage is that
-it is closed-loop and adaptive. It reduces cost only where the model certifies a
-viable, progress-preserving operating point, it keeps direct control's completion
-time far more than aggressive scaling does, and---critically---the \emph{same}
-configuration transfers across the command space and across embodiments, whereas a
-fixed scale must be retuned per robot and can be actively unsafe
+The result both supports and bounds the paper's claim. Under the paired protocol,
+both VGCC channels reduce mechanical work ($5.1\%$), power ($16\%$), and cost of
+transport ($3.9\%$) below direct control, with the COT reduction negative on all six
+seeds and the highest success of any method ($0.802$ vs.\ $0.792$); this is consistent
+with Table~\ref{tab:physical-energy}. What VGCC does \emph{not} do is dominate the
+fixed-scaling frontier. At essentially matched time, fixed $0.90$ reaches a lower COT
+than VGCC ($0.724$ vs.\ $0.737$, lower on five of six seeds), and fixed $0.75$ the
+lowest COT of all ($0.685$) at a $38\%$ time penalty. VGCC sits just above this
+frontier (Figure~\ref{fig:frontier}).
+
+A more elaborate use of the model does not close the gap. A same-budget sampling MPC,
+which plans recursively over the scales $\{0.75,0.90,1.0\}$ with the identified model
+instead of applying VGCC's viability gate, was run paired on three of the six seeds.
+It reaches COT $0.757$, below direct control ($0.765$) but above both VGCC ($0.736$)
+and fixed $0.90$ ($0.721$). Planning more elaborately over the same model beats
+neither the fixed scale nor VGCC, for the reason Section~\ref{sec:results-headroom}
+makes precise. We therefore do not claim VGCC beats a well-tuned fixed scale on cost
+of transport; its value lies instead in one configuration that needs no per-robot
+scale selection and transfers across the command space and embodiments
 (Section~\ref{sec:results-coverage}).
+
+\textbf{Is the gain just a slowdown?} No. The metrics we headline are
+slowdown-invariant: cost of transport and work per meter measure energy per
+\emph{distance}, so walking the same path with the same gait more slowly leaves them
+unchanged, and VGCC's reductions therefore require a genuinely cheaper gait. The
+progress floor $\beta=0.9$ also bounds the per-step slowdown and is load-bearing:
+removing it deepens the proxy saving from $12.2\%$ to $19.6\%$ but costs $3.7$ success
+points (Appendix~\ref{app:ablation}). The slowdown that remains is selective, so VGCC
+lengthens episodes by $17\%$ where the fixed $0.75$ scale pays $40\%$.
 
 \begin{table}[t]
 \centering
-\caption{Locked baseline comparison (3 new seeds, $n=48$/method) using the torque-derived power channel. VGCC is shown under both cost channels. Lower instantaneous power alone does not reduce total work, because task duration changes; a tuned fixed scale is strongest on COT but $40\%$ slower and must be chosen per robot.}
+\caption{Locked frontier comparison on six seeds ($n=96$/method), ordered by completion time. All six methods are evaluated from \emph{identical} initial states (paired resets), so the differences are within-condition. VGCC is shown under both cost channels. Bold marks the best value in each column. VGCC reduces work, power, and COT relative to direct control and attains the highest success, but a per-robot-tuned fixed scale traces a lower COT--time frontier: fixed $0.90$ reaches a lower COT at matched time, and fixed $0.75$ the lowest COT of all at a $38\%$ time cost. A same-budget sampling MPC is discussed in the text.}
 \label{tab:objective-audit}
 \begin{tabular}{lrrrrr}
 \toprule
 Method & Success & Work (J) $\downarrow$ & Power (W) $\downarrow$ & Time (s) $\downarrow$ & COT $\downarrow$ \\
 \midrule
-VGCC (power cost) & 0.771 & 128.40 & 59.14 & 2.123 & 0.742 \\
-VGCC (proxy cost) & 0.833 & 126.45 & 58.40 & 2.130 & 0.735 \\
-fixed scaling ($0.75$) & \textbf{0.854} & \textbf{114.89} & \textbf{42.68} & 2.622 & \textbf{0.663} \\
-reactive governor & 0.792 & 126.18 & 47.08 & 2.780 & 0.728 \\
-direct & 0.833 & 122.89 & 64.18 & \textbf{1.868} & 0.710 \\
+direct & \textbf{0.792} & 135.07 & 68.09 & \textbf{1.918} & 0.767 \\
+fixed scaling ($0.90$) & 0.781 & 126.85 & 57.28 & 2.145 & 0.724 \\
+VGCC (proxy cost) & \textbf{0.802} & 128.20 & 56.99 & 2.207 & 0.737 \\
+VGCC (power cost) & \textbf{0.802} & 128.28 & 56.67 & 2.220 & 0.737 \\
+fixed scaling ($0.75$) & 0.781 & \textbf{119.42} & \textbf{44.05} & 2.648 & \textbf{0.685} \\
+reactive governor & 0.771 & 128.51 & 44.69 & 2.947 & 0.740 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\subsection{Is the Reduction Just a Slowdown?}
-\label{sec:results-slowdown}
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.72\linewidth]{frontier.png}
+\caption{Cost of transport versus completion time on six locked seeds (Go2 harder targets, $n=96$/method, identical initial states). The dashed line is the frontier traced by the direct policy and two fixed command scales. VGCC reduces COT relative to direct control but sits just above the fixed-scaling frontier, while attaining the highest success ($0.80$). The reactive governor is dominated. VGCC's advantage is not frontier dominance but that a single configuration reaches this near-frontier operating point with no pre-selected scale, keeps the highest success, and (Section~\ref{sec:results-coverage}) transfers across the command space and across embodiments, where a fixed scale must be chosen per robot and per deadline in advance. The narrow vertical spread of all methods anticipates Section~\ref{sec:results-headroom}: even an omniscient per-state oracle barely improves on the fixed scale (Figure~\ref{fig:finding}), so this band is close to all that command-level efficiency can buy.}
+\label{fig:frontier}
+\end{figure}
 
-The most direct objection to any command-shaping efficiency method is that it
-merely slows the robot down: instantaneous power falls trivially with speed, so a
-$16\%$ power reduction bought with an $11\%$ longer episode
-(Table~\ref{tab:physical-energy}) could be an artifact rather than a gain. We take
-this objection seriously and answer it on three grounds, then state its residual
-force honestly.
+\subsection{A Narrow Efficiency Frontier}
+\label{sec:results-headroom}
 
-\emph{First, the reported metric is slowdown-invariant.} Cost of transport and work
-per meter measure energy per unit \emph{distance}, not per unit time. Walking the
-same path with the same gait more slowly leaves both unchanged. The main
-configuration's $6.3\%$ COT reduction (Table~\ref{tab:physical-energy}) therefore
-cannot be produced by slowing down alone; it requires a genuinely cheaper gait per
-meter. We deliberately headline COT and work rather than power for exactly this
-reason.
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{finding.png}
+\caption{The paper's central finding, on paired-successful episodes (identical initial states). \textbf{(a)} The COT-optimal command scale is nearly the same in every state: a single scale is optimal in $74$--$78\%$ of episodes on both robots, so there is little for a state-conditioned controller to specialize to. \textbf{(b)} Cost of transport relative to the best single fixed scale ($=1$): an \emph{omniscient} per-state oracle that picks the best scale for every episode lies only $1.0\%$ (Go2) and $1.9\%$ (H1) below that fixed scale; the entire shaded band is the total adaptivity headroom available to \emph{any} state-conditioned method. VGCC and direct control sit above the fixed scale, not because they model the policy poorly but because the headroom they compete for is nearly empty.}
+\label{fig:finding}
+\end{figure}
 
-\emph{Second, the method contains an explicit bound on slowdown, and the ablation
-shows it is load-bearing.} The progress floor $\beta=0.9$ (Eq.~\ref{eq:vgc-eligible})
-forbids any accepted command that would advance less than $90\%$ as fast as direct
-control within the horizon. When we remove it (Appendix~\ref{app:ablation}), VGCC
-does collapse toward the slowdown solution the objection describes: the proxy
-reduction deepens from $-12.2\%$ to $-19.6\%$, active steps rise by $69\%$, and
-success falls by $3.7$ points. VGCC is the configuration that deliberately declines
-that deeper but slower and less reliable operating point.
+The comparisons so far are between specific controllers. The identified model lets us
+ask the question underneath them, the one that determines whether \emph{any}
+state-conditioned command-level controller can succeed here: how much
+state-dependent efficiency structure does the policy's command interface expose? If
+the efficiency-optimal command scale is nearly the same in every state, then no
+per-state gate, however good its model, can beat a single well-chosen scale, and the
+entire enterprise of learned command-level efficiency compensation has a low ceiling.
+We measure that ceiling directly.
 
-\emph{Third, VGCC's slowdown is bounded and selective, not global.} A fixed scale
-slows every command on every step; VGCC slows only the steps its model certifies as
-viable and progress-preserving, and reverts to full-speed direct control
-elsewhere. The measurable consequence is in Table~\ref{tab:objective-audit}: VGCC
-lengthens episodes by $\approx14\%$, whereas the fixed $0.75$ scale that reaches the
-lowest COT pays a $40\%$ time penalty for it. Whatever energy VGCC saves, it saves
-near direct control's completion time, which a global slowdown cannot.
+For every episode we have the ground-truth cost of transport of the direct command
+($1.0$), fixed $0.90$, and fixed $0.75$ from identical initial states. We compare the
+best single \emph{global} scale (minimizing pooled COT) against an \emph{oracle} that
+picks the best scale \emph{per episode}. The oracle is an upper bound on what any
+state-conditioned selector (VGCC, a sampling MPC, or a future method with a perfect
+model) could extract from this command set; the gap between it and the best global
+scale is the total adaptivity headroom that exists to be won.
 
-The residual force of the objection is real and we do not hide it: on a single
-robot with a loose deadline, a tuned fixed scale reaches a \emph{lower} COT than
-VGCC by accepting that larger slowdown, and under re-identification VGCC's work
-advantage over direct control is not robust (Section~\ref{sec:results-baselines}).
-So the honest claim is not that VGCC beats a slowdown on energy---it is that VGCC
-delivers a bounded, success-preserving efficiency gain at a small and controlled
-time cost, using one configuration that stays safe where an unconstrained slowdown
-does not (Section~\ref{sec:results-coverage}).
+That headroom is almost nothing (Figure~\ref{fig:finding}): the per-state oracle
+improves on the best single scale by only $1.0\%$ on Go2 ($n=72$ fully successful
+paired episodes) and $1.9\%$ on H1 ($n=197$). The per-episode winners show why: the
+most aggressive available slowdown wins $78\%$ of Go2 episodes and $74\%$ of H1
+episodes, and COT falls monotonically as the scale drops, so the efficiency-optimal
+command is a near-constant global slowdown, not a state-dependent choice. This single
+measurement explains the entire pattern of results in this section: VGCC lands just
+above the fixed scale, the sampling MPC lands even further off, and the reactive
+governor is dominated, not because any of them models the policy poorly, but because
+the state-dependent structure they exist to exploit is nearly absent. The identification method that a practitioner would use to
+\emph{attempt} the compensation is thus also the cheapest instrument for discovering,
+in advance, that the compensation is not worth deploying: on this policy class, a
+well-chosen fixed command scale is within $2\%$ of optimal, and command-level
+efficiency compensation is a solved, low-ceiling problem.
 
-\subsection{Coverage and Cross-Embodiment Transfer}
+We are careful about scope. This bound is measured on rough-terrain reaching with
+these three policies; it is exactly the regime in which the argument is hardest for
+us, because uniform roughness makes one global slowdown near-optimal. On genuinely
+heterogeneous terrain, where different regions call for different scales, the oracle
+gap should widen and a learned gate could in principle win; Section~\ref{sec:limitations}
+frames that as the decisive open experiment. The contribution here is not that
+adaptivity can never help, but that its headroom is measurable, and on the standard
+benchmark it is small.
+
+\subsection{Coverage and Transfer}
 \label{sec:results-coverage}
 
 A compensation layer should improve efficiency where the base policy is wasteful
 and avoid degrading it where the base policy is strong, using one configuration.
 Table~\ref{tab:coverage} evaluates the frozen configuration on the remaining Go2
-target families and on two further robots. This is where the closed-loop,
-per-state nature of VGCC pays off relative to a fixed scale.
+target families and on two further robots, testing whether the single closed-loop
+configuration improves on direct control everywhere without per-family or per-robot
+objective tuning.
 
 \begin{table}[t]
 \centering
@@ -805,7 +866,7 @@ Family ($n$/method) & Method & Success $\uparrow$ & Effort $\downarrow$ & Effort
 The effort proxy drops on both families ($-5.4\%$ and $-8.0\%$), while observed
 success differs by $-1.7$ and $+1.6$ percentage points. The holdout family is the
 most informative case: these directions were never observed during any tuning, so
-the frozen gate generalizes across the command space---a property the retrieval
+the frozen gate generalizes across the command space, a property the retrieval
 variant does not possess (Appendix~\ref{app:retrieval}: the archive variant
 \emph{increases} the proxy on these directions).
 
@@ -817,22 +878,23 @@ seeds. Since no gate or objective parameter was adjusted, this is consistent wit
 cross-quadruped effect rather than a Go2-only artifact. A single robot and three
 seeds are nevertheless insufficient to establish broad embodiment generality.
 
-\textbf{H1 humanoid: why the safeguard is posture, not the cost margin.}
-The humanoid is where a fixed aggressive scale fails and the viability gate earns
-its place. With the quadruped gate applied unchanged, an aggressive cost margin
-does capture savings but drives the tall, high-inertia H1 into posture collapse on
-the long forward and diagonal targets, costing success (the $2$\,m target falls to
-$0.47$): the failure is loss of balance, not a cost misprediction. The remedy is
-morphological, not a re-tuning of the objective---a humanoid has a much higher
-center of mass and a smaller support region, so its posture floors must be more
-conservative. With the eligibility, rescue, and restore thresholds tightened and
-every non-posture parameter, including the cost margin, left identical to the
-quadruped configuration, VGCC reduces the H1 effort proxy by $4.7\%$ with success
+\textbf{H1 humanoid: the one morphology-dependent component is the posture floor.}
+Transferring VGCC to the humanoid is not zero-shot. With the quadruped posture
+thresholds applied unchanged, VGCC's own model-selected aggressive commands drive
+the tall, high-inertia H1 into posture collapse on the long forward and diagonal
+targets, costing success (the $2$\,m target falls to $0.47$): the loose quadruped
+floors permit commands that a much higher center of mass and smaller support region
+cannot sustain, so the failure is loss of balance, not a cost misprediction. The
+remedy is morphological, not a re-tuning of the objective: tightening the
+eligibility, rescue, and restore posture thresholds while leaving every non-posture
+parameter, including the cost margin, identical to the quadruped configuration. With
+the floors adapted, VGCC reduces the H1 effort proxy by $4.7\%$ with success
 $0.967$ vs.\ $0.975$ and the paired effort difference negative on all three seeds
 ($-3.4\%$, $-3.9\%$, $-6.7\%$). Because the thresholds were changed after observing
 the failure, this row is morphology-adapted evidence, not zero-shot transfer, and
-needs confirmation on fresh humanoid tasks. Its value here is direct: it shows the
-gate converts an unsafe open-loop slowdown into a safe adaptive one.
+needs confirmation on fresh humanoid tasks. The posture floor is thus the single
+component that depends on morphology; the objective, cost margin, model
+architecture, and correction gain are shared unchanged across all three robots.
 
 \subsection{Ablations}
 \label{sec:results-ablation}
@@ -853,16 +915,18 @@ reduction, tracking the cost-channel degradation in Section~\ref{sec:results-mod
 
 \textbf{Energy validity.}
 The large-sample benchmark optimizes and reports a dimensionless actuation-effort
-proxy, not energy. A torque-derived evaluation shows lower simulated mechanical
-work for the main configuration (Table~\ref{tab:physical-energy}), but the locked
-baseline comparison (Table~\ref{tab:objective-audit}) shows that the COT margin
-over direct control is not robust to re-identification, and that a tuned fixed
-scale can achieve a lower COT at a large time cost. The consistent effect is
-therefore reduced instantaneous power and running cost with a modest, adaptive
-work saving---not a demonstrated advantage in mechanical energy over a tuned fixed
-scale. Absolute joint work also counts negative work without a motor-efficiency
-model and is not electrical consumption. Hardware voltage/current measurements and
-actuator losses remain necessary for a real energy claim.
+proxy, not energy. Torque-derived evaluations show lower simulated mechanical work,
+power, and COT than direct control, both for the main configuration
+(Table~\ref{tab:physical-energy}) and in the paired locked comparison on every seed
+(Table~\ref{tab:objective-audit}). What is \emph{not} demonstrated is an advantage
+over the fixed-scaling frontier: a per-robot-tuned fixed scale reaches a lower COT
+than VGCC, marginally at matched time and substantially at a large time cost
+(Figure~\ref{fig:frontier}). The consistent effect is therefore reduced power and
+running cost with a modest, adaptive work saving over the deployed policy, not a
+demonstrated advantage in mechanical energy over a tuned fixed scale. Absolute joint
+work also counts negative work without a motor-efficiency model and is not
+electrical consumption. Hardware voltage/current measurements and actuator losses
+remain necessary for a real energy claim.
 
 \textbf{Completion time.}
 Every efficiency the compensator realizes is entangled with completion time: the
@@ -887,16 +951,20 @@ demonstrate equivalence. A confirmatory study should pre-register a
 noninferiority margin for success and use a hierarchical or cluster bootstrap over
 seeds and targets, with roughly ten independent seeds per family.
 
-\textbf{Baselines and objective.}
-The fixed-scaling and reactive-governor baselines establish that the interesting
-comparison is not against direct control alone but against the speed--energy
-frontier those baselines trace. VGCC's argued advantage---per-state adaptivity,
-preserved completion time, and one configuration that is safe across embodiments---is
-supported here qualitatively (holdout generalization, ANYmal-D transfer, H1
-safety) but not yet by a multi-seed Pareto study that varies the fixed scale and a
-completion-time budget jointly. Establishing that a learned per-state gate strictly
-dominates the fixed-scaling frontier under a fixed deadline is the most important
-open quantitative question.
+\textbf{The efficiency boundary is fundamental here, not incidental.}
+The fixed-scaling and reactive-governor baselines show that the interesting
+comparison is against the speed--energy frontier, and VGCC does not dominate it. The
+oracle analysis (Section~\ref{sec:results-headroom}) makes clear this is not merely a
+modeling shortfall to be closed with a better response model: on uniform rough
+terrain the best command scale is nearly state-independent, so even a perfect
+state-conditioned selector gains under $2\%$ over a single fixed scale. A learned
+per-state gate can only beat a fixed scale where the efficiency-optimal command
+genuinely varies with state. Demonstrating that, most plausibly on heterogeneous
+terrain under a completion-time budget where different regions call for different
+scales, is the decisive open experiment for command-level efficiency compensation,
+and until it is done a well-tuned fixed scale remains the stronger baseline on cost
+of transport. The identification method (Section~\ref{sec:results-model}), by
+contrast, stands independently of this boundary.
 
 \textbf{Scope.}
 All results are in simulation, on target reaching, with velocity-commanded
@@ -928,29 +996,36 @@ progress constraint differently and remain untested.
 \section{Conclusion}
 \label{sec:conclusion}
 
-We presented VGCC, a training-free controller that identifies a frozen policy's
-closed-loop command response and, behind a learned predictive posture gate,
-chooses between a nominally efficient command scale and exact direct control. The
-design is the product of a specific critique of naive command scaling: VGCC scores
-the command it actually executes, optimizes cost per unit progress rather than
-instantaneous cost, and gates on terrain-relative posture with an exact fallback.
-The cost-per-progress objective and the progress floor together answer the natural
-objection that such savings are just a slowdown: the metric is invariant to pure
-slowdown, and the floor bounds the per-step slowdown, so removing it---not keeping
-it---is what drives the controller toward the trivial slow-gait solution
-(Section~\ref{sec:results-slowdown}).
-Empirically, a single configuration reduces the optimized running cost by
-$4$--$10\%$ across four command families and three embodiments with no observed
-aggregate success loss, and a torque-derived evaluation ties this to lower
-simulated mechanical work and cost of transport for the main configuration. A
-locked comparison against a tuned fixed scale keeps the claim honest: fixed scaling
-is a strong COT baseline on a single robot, and VGCC's distinctive value is that it
-is adaptive and safe to deploy unchanged across the command space and across
-embodiments---including a humanoid on which an ungated fixed scale collapses
-posture. What remains for a full physical-efficiency claim is a multi-seed Pareto
-study under a fixed completion-time budget and hardware energy measurement; the
-present study establishes the mechanism and its cross-embodiment robustness in
-simulation.
+We asked what can be identified about a frozen, command-conditioned locomotion
+policy from its command interface alone. Our answer is a method that identifies the
+policy--robot closed-loop command response from excitation rollouts, cheaply and
+accurately: displacement and yaw are predicted at $R^2\ge0.92$, terrain-relative
+posture at $R^2\approx0.9$, and a mechanical-cost channel at $R^2\approx0.75$--$0.8$,
+from about a minute of parallel simulation, with terrain-relative posture labels the
+one ingredient that is necessary rather than incidental. We then used this identified model as a lens on the policy in two modes. As a
+\emph{controller}, VGCC, a training-free compensator that, behind a learned
+predictive posture gate, chooses between the proportional command and a nominally
+efficient scaled command, robustly reduces the deployed policy's running cost and
+mechanical work below the proportional baseline across three embodiments, with an
+exact fallback and no retraining. As a \emph{measurement}, the same model turns a
+vague design question into a number: from identical initial states we bound the
+cost-of-transport frontier of command-level efficiency with a per-state oracle and a
+same-budget MPC, and find it narrow: a tuned fixed command scale is within $2\%$ of
+an omniscient per-state selector, because the policy's command interface exposes
+almost no state-dependent efficiency structure to exploit.
+
+This is the paper's central result, and it is a boundary as much as a method. It says
+that for \emph{efficiency} on rough-terrain locomotion, the large and growing family
+of command-level policy-improvement schemes is chasing a small prize: over a
+well-chosen fixed command, the achievable gain is bounded, and neither our gate nor a
+heavier planner clears it. The value of the identification is that it makes this
+verdict cheap and predictive: a practitioner can fit the model in a minute of
+simulation and read off, before building any controller, whether the command
+interface carries enough state-dependent structure to be worth a learned one. Where
+we expect that structure to appear, and the frontier to open up, is heterogeneous
+terrain under an explicit completion-time budget; establishing whether a learned
+per-state gate can then strictly dominate a fixed scale, on hardware and with true
+energy measurement, is the experiment this study most directly motivates.
 
 \subsubsection*{Reproducibility}
 All experiments use public Isaac Lab environments and public pretrained RSL-RL
