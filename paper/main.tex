@@ -528,9 +528,22 @@ omniscient per-state oracle, is the result we consider most important.
 \subsection{Setup}
 \label{sec:setup}
 
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{setup.png}
+\caption{The three embodiments in their Isaac Lab rough-terrain velocity
+environments: the Go2 and ANYmal-D quadrupeds and the H1 humanoid. Each is driven
+by its publicly distributed pretrained RSL-RL policy, which is the policy VGCC
+compensates; VGCC changes only the command that policy receives, never its weights.
+The two quadrupeds share every gate parameter unchanged; the humanoid differs only
+in its posture thresholds.}
+\label{fig:setup}
+\end{figure}
+
 \textbf{Environments and robots.}
 All experiments use Isaac Lab~\citep{mittal2023orbit} rough-terrain velocity
-environments with three embodiments: \texttt{Isaac-Velocity-Rough-Unitree-Go2-v0}
+environments with three embodiments (Figure~\ref{fig:setup}):
+\texttt{Isaac-Velocity-Rough-Unitree-Go2-v0}
 and \texttt{Isaac-Velocity-Rough-Anymal-D-v0} (quadrupeds) and
 \texttt{Isaac-Velocity-Rough-H1-v0} (humanoid), with the publicly distributed
 pretrained RSL-RL checkpoints~\citep{rudin2022learning,schwarke2025rslrl} as the
