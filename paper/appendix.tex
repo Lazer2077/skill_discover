@@ -1,3 +1,50 @@
+\section{Implementation Details}
+\label{app:impl}
+
+All values below are the ones used for the paper's experiments; the exact launch
+commands are in the project repository.
+
+\textbf{Excitation and dataset.}
+Excitation overrides the converged policy's command with commands drawn uniformly
+over the admissible box $[-1,1]^3$ in $(v_x, v_y, \omega_z)$, resampled every 25
+low-level steps; with probability $0.3$ the drawn command is scaled by $0.3$,
+oversampling the low-magnitude regime that proportional control visits near the
+goal. Collection runs 64 parallel environments (8{,}000 steps per environment for
+H1). Constant-command windows of 16 low-level steps ($0.32$\,s at the 50\,Hz
+control rate) are sliced at stride 4 within episodes, giving the $\approx$25k Go2
+windows of Table~\ref{tab:model}. Terrain-relative height labels are recovered
+from the policy's own height-scan observation (mean scan return plus its
+$0.5$\,m sensor offset).
+
+\textbf{Response model and training.}
+$f_\phi$ is a multilayer perceptron with two hidden layers of width 256 (ReLU,
+dropout $0.1$), mapping the full policy observation, with the command slice
+replaced by the candidate command, to the six response targets; inputs and
+targets are standardized. Training uses AdamW (learning rate $10^{-3}$, weight
+decay $10^{-4}$), batch size 1{,}024, 200 epochs, keeping the checkpoint with the
+best held-out loss. The held-out set is $20\%$ of episode groups, so no episode
+straddles the split; Table~\ref{tab:model} reports this held-out set. The
+torque-derived mechanical-power channel is identified with the same recipe by a
+five-member ensemble.
+
+\textbf{Controller constants.}
+One high-level decision is taken every $E=4$ low-level steps. The gate scalars
+shared by all three robots are: nominal scale $s=0.75$, correction gain
+$\alpha=0.5$ (the executed compensated command is therefore
+$0.875\,c_{\text{goal}}$), progress floor $\beta=0.9$, cost margin
+$\epsilon=0.1$, and progress clamp $\eta=0.02$\,m. The morphology-dependent
+posture floors are the eligibility, rescue, and restore fractions of nominal
+height with the height-decline tolerance $\delta$: $(0.85, 0.80, 0.90)$ with
+$\delta=2$\,cm for both quadrupeds, $(0.93, 0.90, 0.96)$ with $\delta=0.8$\,cm
+for H1 (Section~\ref{sec:setup}).
+
+\textbf{Sampling MPC baseline.}
+The same-budget MPC of Section~\ref{sec:results-baselines} plans over per-step
+scale sequences drawn from $\{0.75, 0.90, 1.00\}$ with planning depth 4
+high-level steps, rolling the identified models forward, and executes the first
+command of the best sequence; it shares the response model, decision rate, and
+command bounds with VGCC.
+
 \section{Secondary Experiments and Diagnostics}
 \label{app:secondary}
 

@@ -45,13 +45,14 @@ $R^2\approx0.75$ to $0.8$, from about a minute of simulation; terrain-relative p
 labels are essential). We use the model in two modes. As a controller, a
 training-free viability-gated compensator lowers the deployed policy's running cost
 and mechanical work across three embodiments (Go2, ANYmal-D, H1). As a measurement,
-it lets us bound the efficiency available at the command interface: from identical
-initial states, an omniscient per-state oracle beats the best single fixed command
-scale by under $2\%$, because the interface exposes almost no state-dependent
-efficiency structure. No learned per-state controller, ours or a heavier sampling
-MPC, clears that ceiling. Command-level efficiency compensation of a frozen
-locomotion policy therefore has a low and measurable ceiling; the contributions are
-the identification method that exposes it and the evaluation that measures it.
+it lets us bound the efficiency available from command scaling at that interface:
+from identical initial states, an omniscient per-episode oracle beats the best
+single fixed command scale by under $2\%$, because the efficiency-optimal scale is
+nearly the same in every episode. No state-conditioned controller we evaluate, ours
+or a heavier sampling MPC, clears that ceiling. Efficiency compensation by command
+scaling therefore has a low and measurable ceiling on these locomotion policies;
+the contributions are the identification method that exposes it and the evaluation
+that measures it.
 \end{abstract}
 
 \keywords{closed-loop system identification \and frozen policies \and command-interface control \and learned dynamics models \and legged locomotion}
@@ -97,16 +98,17 @@ about the policy, is \emph{measurement}. Because the model predicts the situatio
 cost of every command, it lets us ask a question that logically precedes any
 controller: how much efficiency is there to gain at the command interface at all? We
 answer it against ground truth. From identical initial states we trace the
-cost-of-transport--time frontier of command-level efficiency and bound it with an
-omniscient per-state oracle and a same-budget sampling MPC. The finding is sharp: the
-frontier is \emph{narrow}. A single tuned fixed command scale lies within $2\%$ of an
-oracle that picks the best scale for every state, because the policy's command
-interface exposes almost no state-dependent efficiency structure, and no learned
-per-state gate, VGCC or a heavier MPC, clears that ceiling. This reframes a growing
-family of methods that improve frozen policies at the command interface: for
-\emph{efficiency} on rough-terrain locomotion, the achievable gain over a well-chosen
-fixed command is bounded and small, and the identification method is precisely the
-instrument that measures that bound before one invests in a controller.
+cost-of-transport--time frontier of command scaling and bound it with an
+omniscient per-episode oracle and a same-budget sampling MPC. The finding is sharp:
+the frontier is \emph{narrow}. A single tuned fixed command scale lies within $2\%$
+of an oracle that picks the best scale for every episode, because the
+efficiency-optimal scale barely varies from episode to episode, and no
+state-conditioned method we test, VGCC or a heavier MPC, clears that ceiling. This
+reframes a growing family of methods that improve frozen policies at the command
+interface: for \emph{efficiency} on rough-terrain locomotion, the gain available
+from state-conditioned command scaling over a well-chosen fixed scale is bounded
+and small, and the identification method is precisely the instrument that measures
+that bound before one invests in a controller.
 
 \textbf{Contributions.}
 (1)~A method for closed-loop command-response identification of a frozen,
@@ -118,10 +120,10 @@ improves the deployed proportional baseline across three embodiments (Go2, ANYma
 H1) with one configuration and an exact fallback.
 (3)~A measurement, enabled by the identified model and validated against ground
 truth: through paired, iso-time, oracle, and same-budget-MPC analyses we show that
-the cost-of-transport frontier of command-level efficiency is narrow: a tuned fixed
-command scale lies within $2\%$ of an omniscient per-state oracle, which bounds what
-\emph{any} command-level efficiency controller, learned or not, can buy on this
-policy class.
+the cost-of-transport frontier of command scaling is narrow: a tuned fixed command
+scale lies within $2\%$ of an omniscient per-episode oracle over the same scales, a
+bound on what episode-level scale selection, learned or not, can buy on these
+policies, and one that no state-conditioned method we evaluate escapes.
 
 \section{Related Work}
 \label{sec:related}
@@ -415,7 +417,8 @@ f_\phi : (o_t, c) \;\longmapsto\; \bigl(\widehat{\Delta x}, \widehat{\Delta y}, 
 where hats mark quantities \emph{predicted} by the model, plain symbols are
 measured, and $\hat C$ is the chosen cost channel. The implementation takes the
 full policy observation with its command component replaced by the candidate
-command; training and split details are reported in the experimental protocol.
+command; architecture, training, and split details are given in
+Appendix~\ref{app:impl}.
 Conditioning on the full observation is what makes the predictions
 \emph{situational}: the same candidate command is predicted to cost differently on
 different terrain and from different gait states, which is precisely the
@@ -487,7 +490,7 @@ compensation and issues the aggressive direct command until height recovers
 (\emph{restore}). Both reflexes default toward, not away from, the strong direct
 controller, preserving R2. The model is thus a veto on a known low-cost operating
 point, not an unconstrained optimizer. All scalars are selected on development
-seeds and frozen before confirmation.
+seeds and frozen before confirmation; Appendix~\ref{app:impl} lists their values.
 
 \begin{algorithm}[t]
 \caption{Viability-Gated Command Compensation (one high-level step)}
@@ -523,7 +526,7 @@ fallback everywhere else.
 \label{sec:results}
 
 The experiments follow the structure of the method. \textbf{Q1 (identification,
-the main result)}: how accurately and how cheaply can the closed-loop command
+the core method)}: how accurately and how cheaply can the closed-loop command
 response be identified, and what labeling makes it work
 (Section~\ref{sec:results-model})? \textbf{Q2 (application)}: does a compensator
 built on the identified model improve the deployed proportional baseline, and does a
@@ -536,7 +539,7 @@ state-dependent efficiency structure does the command interface expose at all
 (Sections~\ref{sec:results-baselines}--\ref{sec:results-headroom})? Q1 establishes the
 method; Q2 shows what the identified model lets us \emph{do}; Q3 shows what it lets us
 \emph{conclude}. The conclusion, that a tuned fixed scale is within $2\%$ of an
-omniscient per-state oracle, is the result we consider most important.
+omniscient per-episode oracle, is the result we consider most important.
 
 \subsection{Setup}
 \label{sec:setup}
@@ -618,7 +621,8 @@ morphology-adapted transfer, not zero-tuning transfer.
 All reported results use disjoint evaluation seeds: harder $5$ seeds $\times$ $10$
 trials $\times$ $8$ targets (400 episodes per method), moderate $3\times10$ (120),
 holdout $3\times5$ (60), ANYmal-D $3\times5\times8$ (120), H1 $3\times5\times8$
-(120). Per-robot response models are identified with the identical recipe.
+(120). Per-robot response models are identified with the identical recipe
+(Appendix~\ref{app:impl}).
 We report episode-level bootstrap 95\% CIs as descriptive uncertainty summaries.
 Because episodes share a small number of environment seeds, these intervals do not
 establish equivalence or noninferiority; paired seed-level differences are
@@ -757,7 +761,8 @@ frontier (Figure~\ref{fig:frontier}).
 
 A more elaborate use of the model does not close the gap. A same-budget sampling MPC,
 which plans recursively over the scales $\{0.75,0.90,1.0\}$ with the identified model
-instead of applying VGCC's viability gate, was run paired on three of the six seeds.
+instead of applying VGCC's viability gate (Appendix~\ref{app:impl}), was run paired
+on three of the six seeds.
 It reaches COT $0.757$, below direct control ($0.765$) but above both VGCC ($0.736$)
 and fixed $0.90$ ($0.721$). Planning more elaborately over the same model beats
 neither the fixed scale nor VGCC, for the reason Section~\ref{sec:results-headroom}
@@ -796,7 +801,7 @@ reactive governor & 0.771 & 128.51 & 44.69 & 2.947 & 0.740 \\
 \begin{figure}[t]
 \centering
 \includegraphics[width=0.72\linewidth]{frontier.png}
-\caption{Cost of transport versus completion time on six locked seeds (Go2 harder targets, $n=96$/method, identical initial states). The dashed line is the frontier traced by the direct policy and two fixed command scales. VGCC reduces COT relative to direct control but sits just above the fixed-scaling frontier, while attaining the highest success ($0.80$). The reactive governor is dominated. VGCC's advantage is not frontier dominance but that a single configuration reaches this near-frontier operating point with no pre-selected scale, keeps the highest success, and (Section~\ref{sec:results-coverage}) transfers across the command space and across embodiments, where a fixed scale must be chosen per robot and per deadline in advance. The narrow vertical spread of all methods anticipates Section~\ref{sec:results-headroom}: even an omniscient per-state oracle barely improves on the fixed scale (Figure~\ref{fig:finding}), so this band is close to all that command-level efficiency can buy.}
+\caption{Cost of transport versus completion time on six locked seeds (Go2 harder targets, $n=96$/method, identical initial states). The dashed line is the frontier traced by the direct policy and two fixed command scales. VGCC reduces COT relative to direct control but sits just above the fixed-scaling frontier, while attaining the highest success ($0.80$). The reactive governor is dominated. VGCC's advantage is not frontier dominance but that a single configuration reaches this near-frontier operating point with no pre-selected scale, keeps the highest success, and (Section~\ref{sec:results-coverage}) transfers across the command space and across embodiments, where a fixed scale must be chosen per robot and per deadline in advance. The narrow vertical spread of all methods anticipates Section~\ref{sec:results-headroom}: even an omniscient per-episode oracle barely improves on the fixed scale (Figure~\ref{fig:finding}), so this band is close to all that command scaling can buy.}
 \label{fig:frontier}
 \end{figure}
 
@@ -806,45 +811,53 @@ reactive governor & 0.771 & 128.51 & 44.69 & 2.947 & 0.740 \\
 \begin{figure}[t]
 \centering
 \includegraphics[width=\linewidth]{finding.png}
-\caption{The paper's central finding, on paired-successful episodes (identical initial states). \textbf{(a)} The COT-optimal command scale is nearly the same in every state: a single scale is optimal in $74$--$78\%$ of episodes on both robots, so there is little for a state-conditioned controller to specialize to. \textbf{(b)} Cost of transport relative to the best single fixed scale ($=1$): an \emph{omniscient} per-state oracle that picks the best scale for every episode lies only $1.0\%$ (Go2) and $1.9\%$ (H1) below that fixed scale; the entire shaded band is the total adaptivity headroom available to \emph{any} state-conditioned method. VGCC and direct control sit above the fixed scale, not because they model the policy poorly but because the headroom they compete for is nearly empty.}
+\caption{The paper's central finding, on paired-successful episodes (identical initial states). \textbf{(a)} The COT-optimal command scale is nearly the same in every episode: a single scale is optimal in $74$--$78\%$ of episodes on both robots, so there is little for a scale selector to specialize to. \textbf{(b)} Cost of transport relative to the best single fixed scale ($=1$): an \emph{omniscient} per-episode oracle that picks the best scale for every episode lies only $1.0\%$ (Go2) and $1.9\%$ (H1) below that fixed scale; the entire shaded band is the episode-level adaptivity headroom available to scale selection. VGCC and direct control sit above the fixed scale, not because they model the policy poorly but because the headroom they compete for is nearly empty.}
 \label{fig:finding}
 \end{figure}
 
 The comparisons so far are between specific controllers. The identified model lets us
-ask the question underneath them, the one that determines whether \emph{any}
-state-conditioned command-level controller can succeed here: how much
-state-dependent efficiency structure does the policy's command interface expose? If
-the efficiency-optimal command scale is nearly the same in every state, then no
-per-state gate, however good its model, can beat a single well-chosen scale, and the
-entire enterprise of learned command-level efficiency compensation has a low ceiling.
-We measure that ceiling directly.
+ask the question underneath them, the one that determines whether a
+state-conditioned command-scaling controller can succeed here: how much
+situation-dependent efficiency structure does the policy's command interface expose?
+If the efficiency-optimal command scale is nearly the same in every situation, then
+no state-conditioned gate, however good its model, can beat a single well-chosen
+scale, and learned command-scaling compensation has a low ceiling.
+We measure the episode-level component of that ceiling directly.
 
 For every episode we have the ground-truth cost of transport of the direct command
 ($1.0$), fixed $0.90$, and fixed $0.75$ from identical initial states. We compare the
 best single \emph{global} scale (minimizing pooled COT) against an \emph{oracle} that
-picks the best scale \emph{per episode}. The oracle is an upper bound on what any
-state-conditioned selector (VGCC, a sampling MPC, or a future method with a perfect
-model) could extract from this command set; the gap between it and the best global
-scale is the total adaptivity headroom that exists to be won.
+picks the best scale \emph{per episode}. The oracle upper-bounds what any selector
+that holds one scale from this set for the whole episode could extract; the gap
+between it and the best global scale is the episode-level adaptivity headroom that
+exists to be won. A per-step switch (VGCC) or plan (the sampling MPC) is not
+formally bounded by an episode-level oracle, but neither undercuts even the best
+fixed scale in Table~\ref{tab:objective-audit}, let alone the oracle; corrections
+outside the scale family (redirecting or re-timing the command) remain unmeasured.
 
-That headroom is almost nothing (Figure~\ref{fig:finding}): the per-state oracle
+That headroom is almost nothing (Figure~\ref{fig:finding}): the per-episode oracle
 improves on the best single scale by only $1.0\%$ on Go2 ($n=72$ fully successful
 paired episodes) and $1.9\%$ on H1 ($n=197$). The per-episode winners show why: the
 most aggressive available slowdown wins $78\%$ of Go2 episodes and $74\%$ of H1
 episodes, and COT falls monotonically as the scale drops, so the efficiency-optimal
-command is a near-constant global slowdown, not a state-dependent choice. This single
+command is a near-constant global slowdown, not an episode-dependent choice. This single
 measurement explains the entire pattern of results in this section: VGCC lands just
 above the fixed scale, the sampling MPC lands even further off, and the reactive
 governor is dominated, not because any of them models the policy poorly, but because
-the state-dependent structure they exist to exploit is nearly absent. The identification method that a practitioner would use to
+the situational structure they exist to exploit is nearly absent. The identification method that a practitioner would use to
 \emph{attempt} the compensation is thus also the cheapest instrument for discovering,
 in advance, that the compensation is not worth deploying: on this policy class, a
-well-chosen fixed command scale is within $2\%$ of optimal, and command-level
-efficiency compensation is a solved, low-ceiling problem.
+well-chosen fixed command scale is within $2\%$ of the per-episode optimum, and
+command-scaling efficiency compensation is a solved, low-ceiling problem.
 
 We are careful about scope. This bound is measured on rough-terrain reaching with
-these three policies; it is exactly the regime in which the argument is hardest for
-us, because uniform roughness makes one global slowdown near-optimal. On genuinely
+these three policies, the regime least favorable to adaptivity, because uniform
+roughness makes one global slowdown near-optimal. It is also specific to what the
+oracle searches: episode-constant scales from the three-point grid a deployment
+would sweep. Both the best fixed scale and the oracle would move with a denser or
+lower grid, so the $2\%$ figure is specific to this grid, and within-episode
+schedules, which an episode-level oracle does not bound, are probed only at
+development scale (Section~\ref{sec:limitations}). On genuinely
 heterogeneous terrain, where different regions call for different scales, the oracle
 gap should widen and a learned gate could in principle win; Section~\ref{sec:limitations}
 frames that as the decisive open experiment. The contribution here is not that
@@ -982,10 +995,10 @@ The fixed-scaling and reactive-governor baselines show that the interesting
 comparison is against the speed--energy frontier, and VGCC does not dominate it. The
 oracle analysis (Section~\ref{sec:results-headroom}) makes clear this is not merely a
 modeling shortfall to be closed with a better response model: on uniform rough
-terrain the best command scale is nearly state-independent, so even a perfect
-state-conditioned selector gains under $2\%$ over a single fixed scale. A learned
-per-state gate can only beat a fixed scale where the efficiency-optimal command
-genuinely varies with state. Demonstrating that, most plausibly on heterogeneous
+terrain the best command scale is nearly episode-independent, so even a perfect
+per-episode scale selector gains under $2\%$ over a single fixed scale. A learned
+state-conditioned gate can only beat a fixed scale where the efficiency-optimal
+command genuinely varies with state. Demonstrating that, most plausibly on heterogeneous
 terrain under a completion-time budget where different regions call for different
 scales, is the decisive open experiment for command-level efficiency compensation,
 and until it is done a well-tuned fixed scale remains the stronger baseline on cost
@@ -1035,23 +1048,23 @@ efficient scaled command, robustly reduces the deployed policy's running cost an
 mechanical work below the proportional baseline across three embodiments, with an
 exact fallback and no retraining. As a \emph{measurement}, the same model turns a
 vague design question into a number: from identical initial states we bound the
-cost-of-transport frontier of command-level efficiency with a per-state oracle and a
+cost-of-transport frontier of command scaling with a per-episode oracle and a
 same-budget MPC, and find it narrow: a tuned fixed command scale is within $2\%$ of
-an omniscient per-state selector, because the policy's command interface exposes
-almost no state-dependent efficiency structure to exploit.
+an omniscient per-episode selector, because the efficiency-optimal scale is nearly
+the same in every episode.
 
 This is the paper's central result, and it is a boundary as much as a method. It says
-that for \emph{efficiency} on rough-terrain locomotion, the large and growing family
-of command-level policy-improvement schemes is chasing a small prize: over a
-well-chosen fixed command, the achievable gain is bounded, and neither our gate nor a
+that for \emph{efficiency} on rough-terrain locomotion, command-level schemes that
+rescale a frozen policy's commands are chasing a small prize: over a well-chosen
+fixed scale, the achievable episode-level gain is bounded, and neither our gate nor a
 heavier planner clears it. The value of the identification is that it makes this
 verdict cheap and predictive: a practitioner can fit the model in a minute of
 simulation and read off, before building any controller, whether the command
 interface carries enough state-dependent structure to be worth a learned one. Where
 we expect that structure to appear, and the frontier to open up, is heterogeneous
 terrain under an explicit completion-time budget; establishing whether a learned
-per-state gate can then strictly dominate a fixed scale, on hardware and with true
-energy measurement, is the experiment this study most directly motivates.
+state-conditioned gate can then strictly dominate a fixed scale, on hardware and with
+true energy measurement, is the experiment this study most directly motivates.
 
 \subsubsection*{Reproducibility}
 All experiments use public Isaac Lab environments and public pretrained RSL-RL
