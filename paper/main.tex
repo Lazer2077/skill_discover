@@ -85,10 +85,11 @@ its predictability collapses on rough ground.
 The identified model is a reusable lens on the frozen policy, and we put it to work
 in two modes. The first is \emph{control}. We build
 \textbf{Viability-Gated Command Compensation} (VGCC), a training-free controller that
-at each step uses the model to decide between the proportional command and a
-nominally efficient scaled command, accepting the scaled command only where the model
-certifies that it preserves task progress and terrain-relative posture, and otherwise
-falling back to the proportional command exactly. Across three embodiments a single
+at each step scores a structured set of candidate commands around the proportional
+command and executes a bounded correction toward the predicted-cheapest candidate,
+but only where the model certifies that the candidate preserves task progress and
+terrain-relative posture, and otherwise falls back to the proportional command
+exactly. Across three embodiments a single
 configuration reduces the deployed policy's running cost and mechanical work below the
 proportional baseline it is layered on, without reward access, retraining, or changes
 to the low-level feedback.
@@ -260,21 +261,22 @@ The method has two parts. The core is an offline \emph{identification} of the
 frozen policy--robot closed loop from its command interface
 (Section~\ref{sec:model}): a supervised command-response model fit to the policy's
 own excitation rollouts. Built on it is one \emph{application}, an online
-compensator (Section~\ref{sec:vgcc}) that uses the model to decide, at each step,
-between the proportional command and a nominally efficient scaled command
-(Figure~\ref{fig:method}). We present identification first because it is the
-reusable object; the compensator is the concrete use through which we test the
-model.
+compensator (Section~\ref{sec:vgcc}) that uses the model to apply, at each step, a
+bounded gate-certified correction toward the cheapest of a structured set of
+candidate commands (Figure~\ref{fig:method}). We present identification first
+because it is the reusable object; the compensator is the concrete use through
+which we test the model.
 
 \begin{figure}[t]
 \centering
 \includegraphics[width=\linewidth]{vgfc_method.png}
 \caption{VGCC overview. Offline excitation rollouts from the frozen
 policy--robot closed loop train an observation-conditioned response model.
-Online, the model scores the direct and nominally scaled commands; the
-priority-ordered gate restores or rescues posture, compensates only when the
-progress, posture, and cost criteria pass, and otherwise uses the exact direct
-fallback.}
+Online, the model scores a structured candidate set around the direct command
+(scalings, heading offsets, yaw variants); the priority-ordered gate restores or
+rescues posture, compensates with a bounded annealed correction toward the
+cheapest eligible candidate only when the progress, posture, and cost-margin
+criteria pass, and otherwise uses the exact direct fallback.}
 \label{fig:method}
 \end{figure}
 
@@ -427,100 +429,114 @@ information a fixed command-shaping heuristic cannot express.
 \subsection{Viability-Gated Compensation}
 \label{sec:vgcc}
 
-VGCC does not search a large command set. Let $s\in(0,1)$ be a nominal scale,
-fixed after development, and let $\mathcal{C}=\{c_s=s\,c_{\text{goal}},\;c_d=c_{\text{goal}}\}$.
-A single batched forward pass predicts both responses.
+VGCC scores a structured candidate set built around the direct command:
+uniform scalings of $c_{\text{goal}}$ (factors $0.4$ to $1.2$), yaw-rate offsets,
+and a small polar grid of absolute speeds at heading offsets around the target
+direction, about $70$ candidates in total, all clipped to the admissible command
+box (exact values in Appendix~\ref{app:impl}). One batched forward pass of
+$f_\phi$ predicts every candidate's response. The set is wide enough to contain
+slower, redirected, and re-timed variants of the direct command, but each
+candidate is still a single command held for one decision interval, not a plan.
 
-\textbf{Execution-aligned scoring.}
-The compensator does not execute the raw candidate; it executes a bounded
-correction toward it, $c_{\text{exec}}=c_{\text{goal}}+\alpha\,(c_s-c_{\text{goal}})$
-for a correction gain $\alpha\in(0,1]$. VGCC therefore scores the command it will
-actually execute, evaluating $f_\phi$ at $c_{\text{exec}}$ rather than at the
-idealized $c_s$, so that the progress, cost, and posture constraints below refer
-to the realized command. This removes a scoring/execution mismatch that otherwise
-lets the gate certify a command the controller never issues.
+\textbf{Scoring and execution.}
+The gate scores raw candidates; what it executes is a bounded correction toward
+the selected candidate $c^\ast$,
+$c_{\text{exec}}=c_{\text{goal}}+\alpha_t\,(c^\ast-c_{\text{goal}})$, with gain
+$\alpha_t=\alpha\operatorname{clip}(d/d_{\text{anneal}},0,1)$ that anneals to
+zero as the remaining distance $d$ shrinks, so corrections fade out on final
+approach. The executed command therefore always lies between the strong direct
+command and a model-certified candidate; scoring the raw candidate rather than
+the blend is a deliberate simplification whose consequence is limited by the
+bounded gain.
 
 \textbf{Progress floor as a slowdown bound.}
 Predicted target progress is
 \begin{equation}
 \hat{G}(c) \;=\; \lVert g \rVert \;-\; \bigl\lVert g - (\widehat{\Delta x}(c), \widehat{\Delta y}(c)) \bigr\rVert .
 \end{equation}
-The scaled command is \emph{eligible} when it keeps most of direct control's
+A candidate $c$ is \emph{eligible} when it keeps most of direct control's
 progress and leaves posture viable:
 \begin{equation}
-\hat G(c_s)\ge\beta\,\hat G(c_d),\qquad
-\hat h_{\min}(c_s)\ge h_{\rm floor},\qquad
-\hat h_{\rm mean}(c_s)\ge h_{\rm now}-\delta.
+\hat G(c)\ge\beta\,\hat G(c_d),\qquad
+\hat h_{\min}(c)\ge h_{\rm floor},\qquad
+\hat h_{\rm mean}(c)\ge h_{\rm now}-\delta,
 \label{eq:vgc-eligible}
 \end{equation}
+where $c_d=c_{\text{goal}}$ denotes the direct command.
 Because the prediction horizon has a fixed duration, $\hat G(c)$ is progress
-\emph{per unit time}, so the progress floor is directly a bound on how much the
-scaled command may slow the robot down: with $\beta=0.9$, an accepted command must
+\emph{per unit time}, so the progress floor is directly a bound on how much an
+accepted candidate may slow the robot down: with $\beta=0.9$, it must
 advance at least $90\%$ as fast as direct control within the horizon, capping the
 instantaneous slowdown at roughly $10\%$. This constraint is the mechanism that
 keeps VGCC from collapsing into the trivial ``just walk slower'' solution, and
 Section~\ref{sec:results-baselines} shows empirically that removing it does exactly
 that.
 
-\textbf{Cost-per-progress objective.}
-With a fixed horizon duration, $\hat C(c)/\max(\hat G(c),\eta)$ is a local
-cost-per-progress score, predicted mechanical work per unit of task progress, a
-cost-of-transport surrogate. Optimizing this rather than instantaneous cost is the
-second half of the same guard: instantaneous power can always be lowered by
-commanding a slower gait, but that trades energy for time at an unchanged
-work-per-meter and is therefore invisible to a cost-per-progress objective. VGCC
-executes the scaled command only if it is eligible and strictly cheaper per unit
-progress by a margin,
+\textbf{Cost objective and margin.}
+Among eligible candidates, VGCC selects the one with the lowest predicted
+horizon cost, $c^\ast=\arg\min_{c\,\text{eligible}}\hat C(c)$, and activates
+compensation only if the predicted saving clears a relative margin,
 \begin{equation}
-\frac{\hat C(c_s)}{\max(\hat G(c_s),\eta)}
-< (1-\epsilon)\,\frac{\hat C(c_d)}{\max(\hat G(c_d),\eta)},
+\hat C(c^\ast) < (1-\epsilon)\,\hat C(c_d),
 \label{eq:vgc-cost}
 \end{equation}
-and otherwise executes $c_d$ exactly. The two constraints together admit an
-intervention only when it is both no more than marginally slower \emph{and}
-cheaper per meter: a genuine efficiency gain within a bounded slowdown,
-not a slowdown dressed up as one.
+and otherwise executes $c_d$ exactly. The division of labor between the two
+tests matters: predicted cost alone can always be lowered by slowing down, so
+the anti-slowdown guard is the progress floor in
+Eq.~\ref{eq:vgc-eligible}, which restricts the argmin to candidates that give up
+at most a fraction $1{-}\beta$ of direct control's speed, while the margin
+$\epsilon$ demands that what remains is a strict predicted saving rather than
+model noise. An intervention is admitted only when it is both no more than
+marginally slower \emph{and} predicted cheaper by a margin: an efficiency gain
+within a bounded slowdown, not a slowdown dressed up as one. Whether that bounded
+slowdown nevertheless accounts for the realized savings is an empirical question,
+answered with slowdown-invariant metrics in Section~\ref{sec:results-baselines}.
 
 \textbf{Posture rescue and restore.}
 Two reflexes complete the controller. If the model predicts that even the direct
-command will breach the posture floor within the horizon, VGCC selects the
-eligible candidate with the highest predicted minimum height (\emph{rescue}). If
-measured posture has already sagged below the operating band, VGCC suspends
-compensation and issues the aggressive direct command until height recovers
-(\emph{restore}). Both reflexes default toward, not away from, the strong direct
-controller, preserving R2. The model is thus a veto on a known low-cost operating
-point, not an unconstrained optimizer. All scalars are selected on development
-seeds and frozen before confirmation; Appendix~\ref{app:impl} lists their values.
+command will breach the posture floor within the horizon, VGCC instead selects,
+among candidates predicted to make non-negative progress, the one with the
+highest predicted minimum height (\emph{rescue}); the bounded correction then
+pulls the executed command toward it. If measured posture has already sagged
+below the operating band, VGCC suspends compensation and issues the aggressive
+direct command until height recovers (\emph{restore}). Both reflexes default
+toward, not away from, the strong direct controller, preserving R2. The model is
+thus a veto on candidate commands, not an unconstrained optimizer. All scalars
+are selected on development seeds and frozen before confirmation;
+Appendix~\ref{app:impl} lists their values.
 
 \begin{algorithm}[t]
 \caption{Viability-Gated Command Compensation (one high-level step)}
 \label{alg:vgcc}
 \begin{algorithmic}[1]
-\Require frozen policy $\pi_\theta$, response model $f_\phi$, target $g$, scale $s$, correction gain $\alpha$, and fixed scalars $(\beta,h_{\rm floor},\delta,\epsilon)$
-\State Compute body-frame target $g$ and direct command $c_{\text{goal}}$ (Eq.~\ref{eq:cgoal})
-\State Form the executed scaled command $c_{\text{exec}}=c_{\text{goal}}+\alpha(s\,c_{\text{goal}}-c_{\text{goal}})$
-\State Predict $f_\phi(o,c)$ for $c\in\{c_{\text{exec}},c_{\text{goal}}\}$
+\Require frozen policy $\pi_\theta$, response model $f_\phi$, target $g$, correction gain $\alpha$, anneal distance $d_{\text{anneal}}$, and fixed scalars $(\beta,h_{\rm floor},h_{\rm resc},\delta,\epsilon)$
+\State Compute body-frame target $g$, direct command $c_{\text{goal}}$ (Eq.~\ref{eq:cgoal}), and the candidate set $\mathcal{C}$ around $c_{\text{goal}}$
+\State Batch-predict $f_\phi(o,c)$ for all $c\in\mathcal{C}$; set $\alpha_t=\alpha\operatorname{clip}(d/d_{\text{anneal}},0,1)$
 \If{measured posture is below the operating band}
   \State $c\gets c_{\text{goal}}$ \Comment{restore}
-\ElsIf{direct control is predicted to breach the posture floor}
-  \State $c\gets$ eligible candidate with highest predicted $\hat h_{\min}$ \Comment{rescue}
-\ElsIf{$c_{\text{exec}}$ satisfies Eqs.~\ref{eq:vgc-eligible} and~\ref{eq:vgc-cost}}
-  \State $c\gets c_{\text{exec}}$ \Comment{compensate}
+\ElsIf{direct control is predicted to breach the posture floor $h_{\rm resc}$}
+  \State $c^\ast\gets\arg\max_{\mathcal{C}:\,\hat G\ge 0}\hat h_{\min}$;\quad $c\gets c_{\text{goal}}+\alpha_t(c^\ast-c_{\text{goal}})$ \Comment{rescue}
 \Else
-  \State $c\gets c_{\text{goal}}$ \Comment{exact direct fallback}
+  \State $c^\ast\gets\arg\min_{\mathcal{C}\,\text{eligible (Eq.~\ref{eq:vgc-eligible})}}\hat C$
+  \If{$\hat C(c^\ast)<(1-\epsilon)\,\hat C(c_{\text{goal}})$ (Eq.~\ref{eq:vgc-cost})}
+    \State $c\gets c_{\text{goal}}+\alpha_t(c^\ast-c_{\text{goal}})$ \Comment{compensate}
+  \Else
+    \State $c\gets c_{\text{goal}}$ \Comment{exact direct fallback}
+  \EndIf
 \EndIf
 \State Execute $\pi_\theta$ with $c$ for $E$ low-level steps
 \end{algorithmic}
 \end{algorithm}
 
-Comparing a small structured set, rather than searching a broad candidate space or
-planning over a long horizon, is a deliberate choice. The response model is
-reliable for the local, near-stationary consequences of a command
-(Section~\ref{sec:results-model}) but not for ranking many subtly different
-candidates or for compounding predictions over a long horizon. The two-command
-comparison uses the model only where it is trustworthy, to decide whether a known
-efficient operating point is appropriate right now, and leans on the exact
-fallback everywhere else.
+Comparing a structured single-step candidate set, rather than optimizing freely
+over the command box or planning over a long horizon, is a deliberate choice. The
+response model is reliable for the local, near-stationary consequences of a
+command (Section~\ref{sec:results-model}) but not for compounding predictions
+over a long horizon, and the margin $\epsilon$ exists precisely because ranking
+many similar candidates sits at the edge of its accuracy. The gated comparison
+uses the model only where it is trustworthy, to decide whether a cheaper
+certified command exists right now, and leans on the exact fallback everywhere
+else.
 
 \section{Experiments}
 \label{sec:results}
@@ -832,8 +848,10 @@ that holds one scale from this set for the whole episode could extract; the gap
 between it and the best global scale is the episode-level adaptivity headroom that
 exists to be won. A per-step switch (VGCC) or plan (the sampling MPC) is not
 formally bounded by an episode-level oracle, but neither undercuts even the best
-fixed scale in Table~\ref{tab:objective-audit}, let alone the oracle; corrections
-outside the scale family (redirecting or re-timing the command) remain unmeasured.
+fixed scale in Table~\ref{tab:objective-audit}, let alone the oracle. Corrections
+outside the scale family are not searched by the oracle; VGCC's candidate set does
+include redirected and re-timed variants, and their availability does not change
+its position against the fixed scales.
 
 That headroom is almost nothing (Figure~\ref{fig:finding}): the per-episode oracle
 improves on the best single scale by only $1.0\%$ on Go2 ($n=72$ fully successful
@@ -1043,10 +1061,10 @@ posture at $R^2\approx0.9$, and a mechanical-cost channel at $R^2\approx0.75$--$
 from about a minute of parallel simulation, with terrain-relative posture labels the
 one ingredient that is necessary rather than incidental. We then used this identified model as a lens on the policy in two modes. As a
 \emph{controller}, VGCC, a training-free compensator that, behind a learned
-predictive posture gate, chooses between the proportional command and a nominally
-efficient scaled command, robustly reduces the deployed policy's running cost and
-mechanical work below the proportional baseline across three embodiments, with an
-exact fallback and no retraining. As a \emph{measurement}, the same model turns a
+predictive posture gate, applies a bounded correction toward the
+predicted-cheapest of a structured candidate set, robustly reduces the deployed
+policy's running cost and mechanical work below the proportional baseline across
+three embodiments, with an exact fallback and no retraining. As a \emph{measurement}, the same model turns a
 vague design question into a number: from identical initial states we bound the
 cost-of-transport frontier of command scaling with a per-episode oracle and a
 same-budget MPC, and find it narrow: a tuned fixed command scale is within $2\%$ of
