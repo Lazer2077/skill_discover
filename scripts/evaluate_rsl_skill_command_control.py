@@ -411,6 +411,7 @@ def main() -> None:
             "mechanical_efficiency_feedforward_command",
             "aligned_efficiency_feedforward_command",
             "aligned_proxy_feedforward_command",
+            "proxy_efficiency_feedforward_command",
             "viability_gated_scaling_command",
             "task_value_feedforward_command",
             "task_value_scaling_command",
@@ -438,6 +439,7 @@ def main() -> None:
             "mechanical_efficiency_feedforward_command",
             "aligned_efficiency_feedforward_command",
             "aligned_proxy_feedforward_command",
+            "proxy_efficiency_feedforward_command",
             "viability_gated_scaling_command",
             "task_value_feedforward_command",
             "task_value_scaling_command",
@@ -1344,6 +1346,7 @@ def main() -> None:
                         "learned_guarded_skill_command",
                         "model_feedforward_command",
                         "mechanical_feedforward_command",
+                        "proxy_efficiency_feedforward_command",
                         "direct_target_command",
                         "scaled_target_command",
                         "reactive_governor_command",
@@ -1585,6 +1588,7 @@ def main() -> None:
                     execution_aligned = method in {
                         "aligned_efficiency_feedforward_command",
                         "aligned_proxy_feedforward_command",
+                        "proxy_efficiency_feedforward_command",
                         "task_value_feedforward_command",
                         "task_value_scaling_command",
                         "viability_gated_scaling_command",
@@ -1648,12 +1652,13 @@ def main() -> None:
                     if method in {
                             "mechanical_efficiency_feedforward_command",
                             "aligned_efficiency_feedforward_command",
+                            "proxy_efficiency_feedforward_command",
                             "viability_gated_scaling_command",
                     }:
                         # Horizon duration is constant across candidates, so
                         # power/progress ranks predicted mechanical work per meter.
                         pred_energy = pred_energy / np.maximum(pred_progress, 0.02)
-                        cost_output = "mechanical_power_per_progress"
+                        cost_output = f"{cost_output}_per_progress"
                     direct_idx = int(
                         np.argmin(np.linalg.norm(candidates - target_command[None, :], axis=1))
                     )

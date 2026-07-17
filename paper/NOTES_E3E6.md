@@ -147,3 +147,88 @@ identification is now the headline/main result (§4.2), VGCC is one application,
 the COT-frontier + oracle-headroom boundary (§4.6) is presented as a delimiting
 contribution. Efficiency-over-fixed-scaling and safety-over-fixed-scaling claims
 removed throughout. 16 pp, compiles clean.
+
+---
+
+# E7 — Heterogeneous-terrain positive control + gate-objective ablation (2026-07-17)
+
+Purpose (user-directed): test the paper's §4.5/§5 conjecture that heterogeneous
+terrain widens the per-episode oracle gap, applying the method unchanged (fresh
+identification, frozen gate scalars); if negative, attempt a literature-informed
+method improvement; update the paper ONLY if positive. **Both parts NEGATIVE —
+paper not updated.**
+
+Setup: custom single-type Go2 tasks on the unchanged rough env
+(`scripts/hetero_env_cfg.py` + `scripts/eval_hetero.py` registration wrapper):
+FLAT (plane) and ROUGH (`random_rough`, noise 2–10 cm). NOTE: Isaac Lab's
+`random_uniform_terrain` IGNORES the difficulty parameter, so the intended
+"mid difficulty 0.6" task generated terrain identical to the rough task
+(confirmed episode-identical records); `frontier_mid_*` files are therefore a
+5-method single-invocation REPLICATE on the rough terrain, not a third level.
+Hetero response model: merged flat+rough excitation, 25.3k windows, same recipe
+(R² disp 0.92 / energy 0.73 / heights 0.89–0.93). Paired protocol as E1
+(8 harder targets x 2 trials, seeds 811-813). Cross-invocation pairing verified
+bit-exact on flat (16/16) but DIVERGES on rough contacts (8/48 episodes differ
+between 4- and 5-method invocations -> only within-invocation comparisons used
+on rough). Files: `~/storage/skill_discover/outputs/hetero/`.
+
+## E7a — Does roughness heterogeneity open the oracle gap? NO.
+COT falls monotonically with slowdown on EVERY terrain down to the 0.60 grid
+bottom (flat: 1.027/0.964/0.897/0.882 for 1.0/0.9/0.75/0.60; rough:
+1.646/1.565/1.513/1.433 on the arrived+no-fall basis). The efficiency-optimal
+scale is the slowest grid point everywhere; winners do not flip between
+terrains. Flat paired basis (n=41-48): winner 0.60 in 65-68%, headroom
+3.2-4.4% (grid-dependent, cf. paper's 1.0-1.9% on 3 scales). Rough
+(single-invocation basis, arrived+no-fall, n=34): winners LOOK spread
+(0.60 44%, 0.75 24%, 0.90 21%, 1.00 12%; headroom 7.8%) BUT the spread shows
+no target structure (identical within every target) -> it is contact-chaos
+noise inflating the per-episode min (selection bias), not state structure a
+controller could predict. VGCC (evaluated config, hetero-identified model) does
+not beat the best fixed scale anywhere: flat -6.3%, rough -1.4% (though on
+rough it matches best-fixed COT at 28% less time). Gate active 64% (flat) /
+98% (rough) of decisions = near-unconditional slowdown.
+
+## E7b — Success-criterion artifact (affects any high-noise terrain eval)
+`final_height = world z` (evaluator ~line 2071); success requires z >= 70% of
+spawn z. On +/-2-10 cm noise terrain this is dominated by stop-point ground
+elevation: "arrived but low final height" accounts for 0.36 (direct) to 0.58
+(VGCC) of episodes on rough. Artifact-free decomposition (arrived + no fall):
+direct 0.87, fixed-0.75 0.95, VGCC 0.92 — slow/compensated methods arrive MORE
+and fall LESS; falls are 2-4% for all methods. Success comparisons on
+high-noise terrain are criterion noise, not control differences. The paper's
+curriculum-mixed benchmark is milder but the same confound exists (§4.1
+discloses it).
+
+## E7c — Gate-objective ablation (the improvement attempt): NEGATIVE
+Added `proxy_efficiency_feedforward_command` (= §3.3's described cost-per-
+progress objective + execution-aligned scoring; candidate set and all gates
+unchanged). On flat: behavioral no-op vs the evaluated raw-energy gate (COT
+0.9631 vs 0.9623, active 60% vs 61%) — slowing genuinely lowers predicted
+cost-per-progress here, so both objectives rank candidates the same way. On
+the PAPER'S uniform-rough benchmark (seeds 797-799 paired vs archived E1
+records, 48 eps): pe is WORSE than the evaluated gate — work 132.3 vs 126.9 J,
+COT 0.756 vs 0.733, success 0.792 vs 0.854, and it compensates less (time 2.08
+vs 2.25 s). The progress floor already does the anti-slowdown work; dividing
+by predicted progress double-penalizes and over-suppresses compensation on
+irregular terrain. Literature scan (2601.10723 predictive gait selection;
+LoComposition 2606.15896; adaptive energy regularization 2403.20001; power
+fine-tuning 2502.10956): all retrain or train from scratch -> outside the
+frozen-policy constraint. Honest conclusion: within frozen-policy command
+scaling on this benchmark family, "more energy saving" == "more slowdown";
+the paper's boundary result predicted this and E7 confirms it across
+roughness levels.
+
+## E7d — CRITICAL paper-integrity finding (independent of E7a-c)
+§3.3 describes `viability_gated_scaling_command` (two-command set {0.75c, c},
+execution-aligned scoring, cost-per-progress Eq. 5) but every reported result
+(v4 benchmark, Table 3 / E1, coverage table) ran `model_feedforward_command`:
+~70-candidate set (scales 0.4-1.2 + yaw deltas + speed x direction x yaw grid),
+RAW predicted-energy argmin, post-selection 0.5 blend with distance annealing
+(annealing unmentioned in §3.3). vgs only ever ran on dev seed 861. Appendix A
+(added 2026-07-16) propagated the error ("executed command = 0.875 c_goal" and
+s=0.75 describe vgs, not the evaluated controller). Matching parts: progress
+floor beta=0.9, cost margin eps=0.1, posture floors, restore/rescue reflexes,
+exact direct fallback, alpha=0.5 bounded correction formula. E7c shows the
+described and evaluated controllers are NOT numerically equivalent on the
+paper's benchmark, so the repair must rewrite §3.3 (and Appendix A) to
+describe the evaluated controller. PENDING USER DECISION.
