@@ -56,6 +56,21 @@ high-level steps, rolling the identified models forward, and executes the first
 command of the best sequence; it shares the response model, decision rate, and
 command bounds with VGCC.
 
+\textbf{Mixed-terrain evaluation (Section~\ref{sec:results-headroom}).}
+The flat and rough single-type tasks replace the terrain generator of the
+otherwise unchanged rough environment with a single sub-terrain each: a plane,
+and uniform height noise of $2$--$10$\,cm; every scene, observation, command,
+and event setting is identical, and the same pretrained checkpoint is used.
+The response model for these deployments is identified once on pooled excitation
+from both terrains with the unchanged recipe ($\approx$25k windows; displacement
+$R^2=0.92$, cost $0.73$). Fixed scales $\{0.60, 0.75, 0.90, 1.00\}$ and VGCC run
+from identical initial states on three seeds disjoint from all tuning. The
+budget analysis pairs one flat with one rough leg, sweeps a shared
+completion-time budget over the feasible range, and compares the best
+budget-feasible uniform scale against the best per-terrain scale allocation on
+the convex hulls of the per-terrain (work, time) means; the reported interval is
+an episode bootstrap over both legs.
+
 \section{Secondary Experiments and Diagnostics}
 \label{app:secondary}
 
@@ -165,3 +180,17 @@ displacement $R^2=0.92$ but reduces the cost-channel $R^2$ from 0.75 to 0.62,
 halving the realized proxy reduction. An absolute proxy margin fails across
 embodiments (it increases the H1 proxy by 13.5\%), so the relative margin in
 Eq.~\ref{eq:vgc-cost} is retained.
+
+\textbf{Objective ablation.}
+A variant that ranks candidates by predicted cost \emph{per predicted progress}
+(with execution-aligned scoring, all other mechanisms unchanged) was evaluated
+paired against the standard gate on the locked frontier protocol (three seeds,
+$n=48$ episodes per method, identical initial states). It forfeits most of the
+compensation: effort proxy $2.010$ versus $1.810$ for the raw-cost gate (direct
+$2.132$), mechanical work $132.3$ versus $126.9$\,J, success $0.792$ versus
+$0.854$, and it intervenes less (elapsed time $2.08$ versus $2.25$\,s). The
+per-seed paired proxy difference favors the raw-cost gate on all three seeds.
+With the progress floor already capping slowdown, dividing by predicted progress
+double-penalizes slower candidates, so the variant rejects interventions the
+floor would have certified; the anti-slowdown role belongs to the constraint,
+not the objective.
