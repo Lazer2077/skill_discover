@@ -19,8 +19,9 @@
 
 \graphicspath{{figures/}}
 
-\title{Closed-Loop Command-Response Identification of Frozen Locomotion Policies}
-\renewcommand{\shorttitle}{Command-Response Identification of Frozen Policies}
+\title{When Is a Learned Command Adapter Worth It?\\
+Closed-Loop Identification and Counterfactual Auditing of Frozen Locomotion Policies}
+\renewcommand{\shorttitle}{Auditing Learned Adapters for Frozen Policies}
 
 \author{
   Zongtan Li \\
@@ -33,281 +34,194 @@
 \maketitle
 
 \begin{abstract}
-Learned locomotion policies are increasingly deployed as frozen,
-command-conditioned building blocks, driven to tasks through a velocity-command
-interface. We ask what can be learned about such a policy from that interface alone,
-without its weights, reward, or retraining, and what that knowledge is worth. We
-identify the frozen closed loop of policy and robot from excitation rollouts: a
-data-efficient model predicts, for any command in the current situation, the motion
-it produces, its mechanical cost, and the terrain-relative posture it leaves the
-robot in (displacement $R^2\ge0.92$, posture $R^2\approx0.9$, cost
-$R^2\approx0.75$ to $0.8$, from about a minute of simulation; terrain-relative posture
-labels are essential). We use the model in two modes. As a controller, a
-training-free viability-gated compensator lowers the deployed policy's running cost
-and mechanical work across three embodiments (Go2, ANYmal-D, H1). As a measurement,
-it lets us bound the efficiency available from command scaling at that interface:
-from identical initial states, an omniscient per-episode oracle beats the best
-single fixed command scale by under $2\%$, because the efficiency-optimal scale is
-nearly the same in every episode. No state-conditioned controller we evaluate, ours
-or a heavier sampling MPC, clears that ceiling, and the ceiling persists on mixed
-flat--rough deployments even under a completion-time budget: terrain shifts the
-cost level but hardly the command that minimizes it. Efficiency compensation by
-command scaling therefore has a low and measurable ceiling on these locomotion
-policies; the contributions are the identification method that exposes it and the
-evaluation that measures it.
+When a frozen, command-conditioned locomotion policy is deployed as a building
+block, the natural next step is a learned command adapter. We argue that this
+step should be preceded by a cheaper question: does the interface expose an
+improvement that is both real at the same state and recoverable from
+deployment-time features beyond a non-adaptive mixture of the same actions?
+We formalize an \emph{adapter necessity audit} that separates three often
+conflated quantities---global operating-point gain, same-state counterfactual
+headroom, and state-allocation gain over a frequency-matched randomized
+mixture---and maps source-seed uncertainty into a
+\textsc{Go}/\textsc{No-Go}/\textsc{Abstain} decision under user-specified
+practical-value and violation thresholds. Closed-loop command-response
+identification supplies optional decision features: from excitation rollouts, a
+supervised model predicts situational motion, mechanical cost, and
+terrain-relative posture (displacement $R^2\ge0.92$, posture $R^2\approx0.9$,
+cost $R^2\approx0.75$--$0.8$). On Go2 and H1 the diagnosis is sharp. An
+episode-level oracle over three scales beats the best global scale by only
+$1.0$--$1.9\%$. Exact same-state replay on ten seeds finds $5.2\%$ local work
+headroom under success and time constraints, yet a leave-one-seed-out
+treatment-effect selector recovers only $0.55\%$ beyond its matched mixture; its
+candidate treatment-effect error ($11.6\%$) exceeds the signal it must rank.
+This recoverability gap, not the absence of local opportunity, explains why
+neither a viability-gated compensator nor a heavier sampling MPC clears a tuned
+fixed-scaling frontier. Repeating Stages~2--3 on H1 (four seeds, observation-only)
+yields $4.2\%$ oracle headroom but only $0.33\%$ allocation gain and a
+$\delta=1\%$ \textsc{No-Go}. At a $1\%$ practical-value threshold the ten-seed
+Go2 audit returns \textsc{Abstain} (the allocation CI just crosses $1\%$), revising a
+five-seed \textsc{No-Go}. Semi-synthetic controls on the same Go2 states calibrate
+the joint gain--constraint rule. The
+contribution is the audit: a counterfactual test of whether a learned adapter
+is supported by available signal, not another adapter claimed to clear that test.
 \end{abstract}
 
-\keywords{closed-loop system identification \and frozen policies \and command-interface control \and learned dynamics models \and legged locomotion}
+\keywords{adapter necessity audit \and closed-loop system identification \and frozen policies \and counterfactual evaluation \and legged locomotion}
 
 \section{Introduction}
 \label{sec:intro}
 
 Strong learned locomotion policies are increasingly deployed as frozen,
 command-conditioned building blocks: a task layer drives a pretrained
-velocity-tracking policy toward a goal through its command interface, typically with
-a hand-designed proportional command. In this common regime the policy's weights,
-reward, and training pipeline are unavailable or too costly to touch; the only thing
-one can freely do is \emph{observe the policy acting} and choose what command to
-send next. This raises a question that is logically prior to any attempt to improve
-such a policy: what can be identified about a frozen policy purely from its command
-interface, and what does that knowledge buy?
+velocity-tracking policy toward a goal through its command interface, typically
+with a hand-designed proportional command. In this regime the policy's weights,
+reward, and training pipeline are unavailable or too costly to touch; one can
+only observe the policy acting and choose the next command. The usual response
+is to build a learned adapter. We ask a cheaper, logically prior question:
+does the interface expose an improvement that is real at the same state, and
+recoverable from deployment-time features beyond merely changing how often each
+command is issued?
 
-Our first contribution is a method that answers the identification half directly. We
-excite the frozen policy--robot closed loop with commands sampled across its
-admissible range and fit a supervised model that predicts, for any candidate command
-in the current situation, the short-horizon motion it produces, its mechanical cost,
-and the terrain-relative posture it leaves the robot in. Modeling the \emph{closed
-loop} at the command interface, rather than the robot's action-level dynamics as in
-model-based RL, keeps the input three-dimensional and makes identification a cheap
-supervised problem on the policy's own rollouts. The resulting model is accurate and
-data-efficient, and we isolate one ingredient that is essential rather than
-incidental: posture must be labeled in terrain-relative coordinates, without which
-its predictability collapses on rough ground.
+Controller rankings alone cannot answer that question. Beating a proportional
+baseline may reflect a better global operating point rather than useful
+state-conditioned allocation; failing to beat a tuned fixed scale may mean either
+that no local headroom exists or that the available representation cannot recover
+it. We therefore introduce an \emph{adapter necessity audit} that separates three
+quantities: (i)~global operating-point gain from choosing one fixed intervention;
+(ii)~same-state counterfactual headroom of an oracle that observes realized
+outcomes; and (iii)~state-allocation gain of a cross-fitted selector over a
+randomized mixture with identical action frequencies. Source-seed cluster
+bootstrap and user-specified practical-value / violation thresholds map these
+estimates into \textsc{Go}, \textsc{No-Go}, or \textsc{Abstain}. Abstention is
+first-class: an underpowered audit is not evidence that an adapter is unnecessary.
 
-The identified model is a reusable lens on the frozen policy, and we put it to work
-in two modes. The first is \emph{control}. We build
-\textbf{Viability-Gated Command Compensation} (VGCC), a training-free controller that
-at each step scores a structured set of candidate commands around the proportional
-command and executes a bounded correction toward the predicted-cheapest candidate,
-but only where the model certifies that the candidate preserves task progress and
-terrain-relative posture, and otherwise falls back to the proportional command
-exactly. Across three embodiments a single
-configuration reduces the deployed policy's running cost and mechanical work below the
-proportional baseline it is layered on, without reward access, retraining, or changes
-to the low-level feedback.
+To supply optional decision features---and as a reusable measurement of the
+closed loop---we identify the frozen policy--robot response from excitation
+rollouts. A supervised model predicts, for any candidate command in the current
+situation, short-horizon motion, mechanical cost, and terrain-relative posture.
+Modeling the closed loop at the three-dimensional command interface, rather than
+action-level dynamics, makes identification a cheap supervised problem on the
+policy's own rollouts. Average prediction accuracy is high (displacement
+$R^2\ge0.92$; posture $R^2\approx0.9$; cost $R^2\approx0.75$--$0.8$), and
+terrain-relative posture labels are necessary on rough ground. Accuracy alone,
+however, does not certify ranking value: the audit tests whether these
+predictions improve counterfactual selection beyond the observation itself.
 
-The second mode, and the one that raises this work from a controller to a statement
-about the policy, is \emph{measurement}. Because the model predicts the situational
-cost of every command, it lets us ask a question that logically precedes any
-controller: how much efficiency is there to gain at the command interface at all? We
-answer it against ground truth. From identical initial states we trace the
-cost-of-transport--time frontier of command scaling and bound it with an
-omniscient per-episode oracle and a same-budget sampling MPC. The finding is sharp:
-the frontier is \emph{narrow}. A single tuned fixed command scale lies within $2\%$
-of an oracle that picks the best scale for every episode, because the
-efficiency-optimal scale barely varies from episode to episode, and no
-state-conditioned method we test, VGCC or a heavier MPC, clears that ceiling. This
-reframes a growing family of methods that improve frozen policies at the command
-interface: for \emph{efficiency} on rough-terrain locomotion, the gain available
-from state-conditioned command scaling over a well-chosen fixed scale is bounded
-and small, and the identification method is precisely the instrument that measures
-that bound before one invests in a controller.
+As a concrete adapter under that audit we study
+\textbf{Viability-Gated Command Compensation} (VGCC): a training-free controller
+that scores a structured candidate set around the proportional command and
+applies a bounded correction toward the predicted-cheapest eligible candidate,
+falling back exactly otherwise. Across three embodiments it lowers running cost
+and mechanical work relative to the proportional baseline, yet neither VGCC nor a
+heavier sampling MPC clears a tuned fixed-scaling frontier. The audit explains
+why. An episode-level oracle over three scales improves on the best global scale
+by only $1.0$--$1.9\%$. Exact same-state replay on ten source seeds finds
+$5.2\%$ local work headroom under success and a $10\%$ time budget, so local
+opportunity exists. Recoverability fails: a treatment-effect ensemble realizes
+only $0.55\%$ beyond a frequency-matched mixture, while its candidate
+treatment-effect error ($11.6\%$) exceeds the signal it must rank. At a $1\%$
+practical-value threshold the ten-seed audit returns \textsc{Abstain}, revising a
+five-seed \textsc{No-Go}.
 
 \textbf{Contributions.}
-(1)~A method for closed-loop command-response identification of a frozen,
-command-conditioned policy from excitation rollouts: a data-efficient model
-predicting situational motion, mechanical cost, and terrain-relative posture, with
-terrain-relative posture labels shown to be necessary.
-(2)~VGCC, a training-free compensator built on the identified model, that robustly
-improves the deployed proportional baseline across three embodiments (Go2, ANYmal-D,
-H1) with one configuration and an exact fallback.
-(3)~A measurement, enabled by the identified model and validated against ground
-truth: through paired, iso-time, oracle, and same-budget-MPC analyses we show that
-the cost-of-transport frontier of command scaling is narrow: a tuned fixed command
-scale lies within $2\%$ of an omniscient per-episode oracle over the same scales, a
-bound on what episode-level scale selection, learned or not, can buy on these
-policies, and one that no state-conditioned method we evaluate escapes.
+(1)~\emph{Adapter necessity audit.} A protocol that separates global
+operating-point gain, same-state counterfactual headroom, and recoverable
+state-allocation gain over a matched randomized mixture, with an explicit
+three-way deployment decision under practical-value and violation thresholds.
+(2)~\emph{Closed-loop command-response identification.} A data-efficient model
+of situational motion, mechanical cost, and terrain-relative posture for a
+frozen command-conditioned policy, with terrain-relative posture labels shown
+to be necessary and with identification treated as an optional feature source
+rather than an assumed prerequisite for the audit.
+(3)~\emph{Empirical diagnosis.} On standard rough-terrain reaching with two
+adapter designs and three embodiments, local headroom ($5.2\%$ Go2; $4.2\%$ H1)
+is largely unrecoverable ($0.55\%$ / $0.33\%$ allocation gain); Go2's ten-seed
+audit abstains at $\delta=1\%$ while H1's four-seed observation-only audit
+returns \textsc{No-Go}; semi-synthetic controls calibrate the joint
+gain--constraint rule. VGCC is the case study that motivates the audit, not a
+claimed frontier-dominating controller.
 
 \section{Related Work}
 \label{sec:related}
 
-\textbf{Feedforward and internal model control.}
-Feedforward compensation precorrects a reference using a plant model, leaving
-feedback to handle residual error~\citep{astrom2008feedback}; the internal model
-principle formalizes why regulation requires a model of the signals to be tracked
-or rejected~\citep{francis1976internal}.
-VGCC transports this structure to learned policies: the ``plant'' is the
-policy--robot closed loop, the model is a learned network, and inversion is a
-discrete comparison over a small command set.
-The novelty is not the control-theoretic template but its instantiation on top of
-a frozen RL policy, with the model identified from the policy's own rollouts.
+\textbf{Improving pretrained controllers without retraining.}
+Residual policy learning adds action-space corrections but requires reward access
+and further interaction~\citep{silver2018residual,johannink2019residual}.
+RMA~\citep{kumar2021rma} and multiplicity-of-behavior
+training~\citep{margolis2022walk} expose adaptation at training time.
+Massively parallel pipelines and terrain curricula improve the base policy during
+training~\citep{rudin2022learning,makoviychuk2021isaac,mittal2023orbit,lee2020learning,miki2022learning}.
+Our setting is the remaining cell: the policy is frozen, only its command
+interface is writable, and the question is whether a learned adapter is justified.
+Interface-level optimization over a fixed low-level controller is successful in
+eco-driving~\citep{sciarretta2015ecodriving} and reference
+governors~\citep{garone2017reference}; our audit asks when the analogous claim
+holds for efficiency over a velocity-commanded locomotion policy.
 
-\textbf{Model-based RL.}
-Learning a dynamics model and exploiting it for control is one of the oldest
-programs in RL: Gaussian process models enable data-efficient policy
-search~\citep{deisenroth2011pilco}, probabilistic neural ensembles support
-sampling-based planning within a handful of trials~\citep{chua2018deep}, short
-model-generated rollouts accelerate policy optimization~\citep{janner2019trust},
-latent world models train behaviors entirely in
-imagination~\citep{hafner2020dream}, and learned models combine with terminal
-value functions for planning~\citep{hansen2022temporal}; on physical robots,
-neural dynamics models have driven locomotion and navigation
-directly~\citep{nagabandi2018neural}.
-All of these model the environment at the \emph{action} level so that a policy or
-planner can be built on top.
-VGCC inverts the arrangement: the policy already exists and is competent, so what
-is modeled is the short-horizon response of the \emph{closed loop}, policy
-included, to its 3-D command input.
-This collapses the input dimensionality at the interface, makes inversion by
-enumeration trivial, and confines the decision to ``commands the policy
-understands'' rather than raw torques.
+\textbf{Closed-loop models for command-level control.}
+Model-based RL typically learns action-level
+dynamics~\citep{deisenroth2011pilco,chua2018deep,janner2019trust,hafner2020dream,hansen2022temporal,nagabandi2018neural}.
+When a competent policy already exists, modeling the closed loop at the command
+interface collapses input dimensionality and restricts decisions to commands the
+policy understands. Related instantiations include reference governors and
+predictive safety filters on prestabilized
+loops~\citep{garone2017reference,wabersich2021predictive}, ABS searching twist
+commands against a co-trained reach-avoid value~\citep{he2024agile}, and
+Koopman identification of an RL-controlled biped for safe
+navigation~\citep{kim2024koopman}. Feedforward/internal-model
+control~\citep{astrom2008feedback,francis1976internal} and sampling
+MPC~\citep{mayne2000constrained,williams2018information,kabzan2019learning,dicarlo2018dynamic}
+supply the control templates. VGCC is a small member of this family---gated
+one-step compensation from an identified response model---used here as a case
+study. Unlike prior systems that treat identification as a means to control, we
+treat it as a falsifiable feature source: we ask whether its predictions improve
+counterfactual ranking beyond the observation and beyond a frequency-matched
+non-adaptive mixture.
 
-\textbf{MPC in robotics and vehicles.}
-Model predictive control optimizes a model-based cost over a receding horizon
-under constraints~\citep{mayne2000constrained}, and is widely used in both
-vehicle and legged control: predictive steering on slippery
-roads~\citep{falcone2007predictive}, sampling-based path-integral control for
-aggressive autonomous driving~\citep{williams2018information}, learned-dynamics
-MPC for autonomous racing~\citep{kabzan2019learning}, and convex MPC for
-quadruped locomotion~\citep{dicarlo2018dynamic}; and learning-based MPC with
-safety guarantees is an active research area in its own
-right~\citep{hewing2020learning}.
-VGCC can be read as the smallest useful member of this family: a single-interval
-decision whose ``dynamics'' are an identified closed-loop response, whose decision
-variable is one velocity command rather than an action sequence, and whose
-constraint handling is a veto gate with a guaranteed fallback instead of
-constrained optimization.
-The simplification is deliberate: the low-level policy already solves the hard
-receding-horizon problem at the contact timescale, so the compensator only needs
-to choose \emph{which} well-understood command to issue next.
+\textbf{Treatment choice and policy value.}
+Learning a command adapter from same-state interventions is a treatment
+assignment problem: context is observed before choosing an intervention, and the
+goal is policy value rather than marginal prediction accuracy. Empirical welfare
+maximization~\citep{kitagawa2018treatment}, efficient policy
+learning~\citep{athey2021policy}, and counterfactual risk
+minimization~\citep{swaminathan2015crm} formalize this distinction.
+Our setting has deterministic exact-replay potential outcomes rather than
+unknown propensities, but adds robotics-specific requirements: task success/time
+eligibility and comparison against a randomized policy with the same intervention
+frequencies. The latter isolates state-conditioned allocation from globally
+changing the operating point---the distinction our audit is built to enforce.
 
-\textbf{Reference governors and safety filters.}
-The structure of VGCC has a precise control-theoretic ancestor: the reference
-governor, an add-on scheme that monitors and minimally modifies the reference of
-a prestabilized closed loop to enforce constraints~\citep{garone2017reference},
-and its learning-era descendant, the predictive safety filter, which certifies or
-corrects a proposed input by model prediction~\citep{wabersich2021predictive}.
-VGCC can be read as a \emph{learned, cost-optimizing} governor: where governors
-modify the reference only as much as constraint enforcement demands, VGCC
-additionally optimizes a running cost at matched task progress, and its ``model''
-is identified from rollouts rather than derived, trading the governors' invariance
-guarantees for applicability to policies whose dynamics exist only as a network.
-Two recent robot-learning systems are the most closely related.
-ABS~\citep{he2024agile} searches twist commands against a learned reach-avoid
-value to keep an agile quadruped policy collision-free; its objective is safety,
-and its value network and policy are co-trained as one framework, whereas VGCC
-attaches to an unmodified pretrained policy and optimizes efficiency subject to
-safety.
-\citet{kim2024koopman} identify linear Koopman dynamics of an RL-controlled biped,
-policy in the loop, for MPC-based safe navigation; VGCC likewise identifies the
-closed loop at the command level, but with an observation-conditioned nonlinear
-model whose terrain-dependent cost and posture channels have no linear
-lifted-state analogue, and uses it for compensation rather than navigation.
-To our knowledge, the specific combination that VGCC instantiates (post-hoc
-identification of a frozen policy's situational command response, running-cost
-optimization at matched predicted progress, and a learned predictive viability
-gate behind a bounded correction with exact fallback) has not previously been
-reported, although each constituent mechanism has established antecedents.
-More important than the controller, and unlike these prior systems, is how we use
-the identified model: not only to \emph{act} on the policy but to \emph{measure} a
-property of it: the state-dependent efficiency headroom its command interface
-exposes. Where prior closed-loop identifications are means to a control end, we treat
-identification as an instrument that returns a boundary result about the achievable
-frontier of command-level compensation, which is the contribution we most want to
-transfer.
-
-\textbf{Options, skills, and behavior archives.}
-Temporal-abstraction research builds libraries of reusable behaviors:
-options~\citep{sutton1999options,bacon2017option}, unsupervised
-skills~\citep{eysenbach2019diversity,sharma2020dynamics}, skill priors from
-offline data~\citep{pertsch2020spirl,ajay2021opal}, large-scale skill
-embeddings~\citep{peng2022ase}, and quality-diversity repertoires used for rapid
-adaptation~\citep{mouret2015illuminating,cully2015robots,pugh2016quality}.
-DADS~\citep{sharma2020dynamics} is notable here for planning over learned skill
-transition models, but those models are co-trained with the skills they describe;
-VGCC instead identifies the response of an already-trained task policy it had no
-part in shaping.
-A retrieval-based variant (Appendix~\ref{app:retrieval}) reuses an online archive
-of behavior chunks as gated command residuals; our experiments characterize it as
-a partial solution that inherits the coverage limits of the archive, whereas the
-parametric response model interpolates over the entire command space.
-Hierarchical RL layers goal-conditioned controllers~\citep{nachum2018data}, and
-recent imitation methods execute action chunks closed loop~\citep{zhao2023learning};
-we find raw chunk replay destabilizes contact-rich locomotion, which motivates
-compensation at the command interface instead.
-
-\textbf{Improving a pretrained policy without retraining it.}
-Residual policy learning adds a learned action-space correction on top of a base
-controller~\citep{silver2018residual,johannink2019residual}; it improves the base
-but requires reward access and further environment interaction, and its
-correction shares authority at the contact-critical timescale.
-RMA adapts a policy online through a latent extrinsics
-estimate~\citep{kumar2021rma}, and multiplicity-of-behavior training exposes a
-space of gaits through the command interface~\citep{margolis2022walk}; both must
-be built in at training time.
-Massively parallel pipelines~\citep{rudin2022learning,makoviychuk2021isaac,mittal2023orbit,schwarke2025rslrl}
-and terrain curricula~\citep{lee2020learning,miki2022learning} improve the policy
-during training.
-VGCC occupies the remaining cell of this matrix: it is attached after training,
-learns nothing by reinforcement, touches only the command interface the policy
-already exposes, and computes its correction by inverting an identified model.
-Command-level intervention preserves the base policy's low-level feedback
-structure, but it does not by itself guarantee balance: a poor command can still
-induce posture loss, which is precisely what the viability gate and bounded
-correction exist to prevent.
-That this cell is empty is itself informative. Interface-level optimization over
-a fixed low-level controller thrives wherever the interface exposes
-state-dependent structure: eco-driving optimizes speed profiles over a fixed
-powertrain for substantial energy savings~\citep{sciarretta2015ecodriving}, and
-reference governors modify setpoints for safety~\citep{garone2017reference}.
-Our boundary result (Section~\ref{sec:results-headroom}) suggests the absence of
-prior command-level \emph{efficiency} compensation for locomotion is not an
-oversight but a reflection of the interface: a policy trained for robust
-velocity tracking exposes little efficiency structure for such a layer to
-exploit, and the identification this paper develops is a way to measure that
-before building one.
+\textbf{Options and behavior archives.}
+Temporal abstraction builds reusable behavior
+libraries~\citep{sutton1999options,bacon2017option,eysenbach2019diversity,sharma2020dynamics,peng2022ase,mouret2015illuminating}.
+DADS plans over skill transition models co-trained with the
+skills~\citep{sharma2020dynamics}; we instead identify an already-trained task
+policy. A retrieval-based archive variant is characterized in
+Appendix~\ref{app:retrieval} as coverage-limited relative to the parametric
+response model. We intervene at the command interface because raw chunk replay
+destabilizes contact-rich locomotion~\citep{zhao2023learning}.
 
 \section{Method}
 \label{sec:method}
 
-The method has two parts. The core is an offline \emph{identification} of the
-frozen policy--robot closed loop from its command interface
-(Section~\ref{sec:model}): a supervised command-response model fit to the policy's
-own excitation rollouts. Built on it is one \emph{application}, an online
-compensator (Section~\ref{sec:vgcc}) that uses the model to apply, at each step, a
-bounded gate-certified correction toward the cheapest of a structured set of
-candidate commands (Figure~\ref{fig:method}). We present identification first
-because it is the reusable object; the compensator is the concrete use through
-which we test the model.
-
-\begin{figure}[t]
-\centering
-\includegraphics[width=\linewidth]{vgfc_method.png}
-\caption{VGCC overview. Offline excitation rollouts from the frozen
-policy--robot closed loop train an observation-conditioned response model.
-Online, the model scores a structured candidate set around the direct command
-(scalings, heading offsets, yaw variants); the priority-ordered gate restores or
-rescues posture, compensates with a bounded annealed correction toward the
-cheapest eligible candidate only when the progress, posture, and cost-margin
-criteria pass, and otherwise uses the exact direct fallback.}
-\label{fig:method}
-\end{figure}
+The method has three parts. The primary object is an \emph{adapter value audit}
+that separates available counterfactual headroom from the value a
+state-conditioned selector recovers beyond a frequency-matched randomized policy
+(Section~\ref{sec:audit}). Closed-loop command-response identification
+(Section~\ref{sec:model}) supplies optional decision features for that audit and
+for any compensator built on the same interface. VGCC
+(Section~\ref{sec:vgcc}) is one concrete adapter placed under the audit: a bounded, gate-certified correction toward the cheapest of a structured candidate set. Identification is not assumed necessary for a positive audit decision; the audit measures whether its features help.
 
 \textbf{Design requirements.}
-Three requirements shape both parts.
-\emph{R1, no retraining}: everything must be obtained by only \emph{observing the
-policy acting}, since its weights, reward, and training pipeline are unavailable or
-too expensive to touch.
-\emph{R2, non-degradation}: any controller built on the model must be able to revert
-to the strong pretrained policy exactly, and reject its own intervention when the
-predicted benefit is uncertain.
-\emph{R3, embodiment generality}: nothing may depend on robot-specific knowledge
-beyond what the identification recovers automatically from the policy's own
-rollouts.
-The architecture has a command interface (where to intervene,
-Section~\ref{sec:setting}), a response model (what to know,
-Section~\ref{sec:model}), and a viability gate (how to act,
-Section~\ref{sec:vgcc}).
+\emph{R1, observation only}: weights, reward, and training pipeline are
+unavailable; everything must come from observing the policy act.
+\emph{R2, non-degradation}: any deployed adapter must revert to the pretrained
+policy exactly when its intervention is uncertain.
+\emph{R3, embodiment-light}: nothing may depend on robot-specific knowledge
+beyond what identification recovers from rollouts (posture thresholds may adapt
+to morphology; objectives and model architecture should not).
+These constraints shape the interface (Section~\ref{sec:setting}), the response
+model, the audit protocol, and the VGCC case study.
 
 \subsection{Compensation Interface}
 \label{sec:setting}
@@ -320,37 +234,21 @@ through which behavior can be steered, a property shared by learned controllers
 deployed as task-level building blocks~\citep{margolis2022walk,kumar2021rma}.
 
 \textbf{Scope.}
-Three properties of the policy, not of robots, delimit where the framework
-applies.
-\emph{(i) A command interface must exist}: a single task policy trained without
-conditioning exposes nothing to invert over, so VGCC does not apply to
-unconditioned RL policies (a limitation shared by every command-level method).
-\emph{(ii) The interface must carry redundancy}: compensation exploits the
-existence of several commands that make comparable task progress at different
-cost; a task that fully determines the command admits no efficiency gain.
-\emph{(iii) The closed loop must respond at a fast, roughly stationary timescale}:
-command consequences must be visible within a short prediction window, which holds
-when the policy stabilizes its plant (locomotion, end-effector servoing, vehicle
-velocity/curvature tracking) and fails for sparse, long-horizon credit-assignment
-problems.
-These conditions characterize command-conditioned continuous control broadly,
-from legged robots to vehicle controllers, rather than reinforcement learning in
-general; Section~\ref{sec:limitations} returns to what lies outside them.
+Three properties delimit where the framework applies.
+\emph{(i)~Command interface}: an unconditioned single-task policy exposes nothing
+to invert over.
+\emph{(ii)~Command redundancy}: several commands must make comparable progress at
+different cost; a fully determined command admits no efficiency gain.
+\emph{(iii)~Fast closed-loop response}: command consequences must be visible within
+a short prediction window (locomotion, end-effector servoing, vehicle tracking),
+not sparse long-horizon credit assignment.
+Section~\ref{sec:limitations} returns to what lies outside these bounds.
 
-Why intervene at the command rather than at the action, as residual policy
-learning does~\citep{silver2018residual,johannink2019residual}?
-Three reasons, mirroring the three requirements.
-First, action-space corrections must be \emph{learned}, and learning them
-requires reward access and environment interaction, violating R1; a command-space
-correction can instead be \emph{computed} from an identified model.
-Second, an action-space residual shares authority with the policy at the
-contact-critical timescale, whereas a command-space correction leaves $\pi_\theta$
-in control of posture, contacts, and joints. This reduces the intervention
-bandwidth but does not by itself guarantee stability; R2 therefore requires
-explicit fallback and posture gating.
-Third, the command interface is the one interface that command-conditioned
-policies share across embodiments (R3): the same three command variables steer a
-quadruped and a humanoid.
+We intervene at the command rather than the action for three reasons aligned with
+R1--R3. Action residuals require reward and further interaction; a command
+correction can be computed from an identified model. Command corrections leave
+$\pi_\theta$ in control of contacts, but still need explicit fallback and posture
+gating (R2). The command interface is shared across embodiments (R3).
 
 A task supplies a target; throughout the method, $g$ denotes that target expressed
 in the robot's body frame at the current step, and the \emph{direct} controller
@@ -362,30 +260,20 @@ c_{\text{goal}} \;=\; \bigl(\operatorname{clip}_{[-v_x^{\max},v_x^{\max}]}(k_v x
 \label{eq:cgoal}
 \end{equation}
 which is the uncompensated baseline: a strong pretrained policy driven straight at
-the goal.
-Proportional commands of this kind are the standard way tasks are layered on
-velocity-conditioned policies, and they carry a systematic inefficiency: far from
-the goal they saturate, commanding full speed regardless of whether the terrain
-rewards it, and near the goal they shrink, producing energy-intensive in-place
-stepping.
-Compensation replaces $c_{\text{goal}}$ with a corrected command at each
-controller decision. The design question is where the correction comes from and
-when it is trusted.
+the goal. Such proportional commands are the standard task layer on
+velocity-conditioned policies; they saturate far from the goal and induce
+energy-intensive in-place stepping near it. Compensation replaces
+$c_{\text{goal}}$ when---and only when---a corrected command is trusted.
 
 \subsection{Command-Response Model}
 \label{sec:model}
 
-To decide whether a candidate command is worth executing, the compensator must
-predict what it would do.
-The object to model is not the robot's action-level dynamics, as in model-based
-RL~\citep{nagabandi2018neural}: the policy already handles those competently, and
-re-modeling them would duplicate its work at far higher dimensionality.
-The relevant object is the \emph{closed loop} of policy and robot, viewed from the
-command interface: for the current situation, it specifies the motion, cost, and
-postural risk that each candidate command produces.
-This reframing keeps the model input three-dimensional at the interface and makes
-identification a supervised problem on the policy's own rollouts, satisfying R1
-and R3 simultaneously.
+Adapters and audits both need predictions of what a candidate command would do.
+We model the \emph{closed loop} of policy and robot at the command interface,
+not action-level dynamics~\citep{nagabandi2018neural}: the policy already handles
+contacts, and re-modeling them would duplicate that work at far higher
+dimensionality. The closed-loop view keeps the input three-dimensional and makes
+identification a supervised problem on the policy's own rollouts (R1, R3).
 
 \textbf{Excitation data.}
 We override the converged policy with commands sampled throughout its admissible
@@ -439,8 +327,119 @@ Conditioning on the full observation is what makes the predictions
 different terrain and from different gait states, which is precisely the
 information a fixed command-shaping heuristic cannot express.
 
+\subsection{Adapter Value Audit}
+\label{sec:audit}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{audit_pipeline.png}
+\caption{Adapter necessity audit. Stage~1 measures opportunity
+($H_{\rm global}$, $H_{\rm avail}$). Stage~2 isolates state-allocation gain
+$H_{\rm alloc}$ over a frequency-matched mixture. Stage~3 maps source-seed
+uncertainty into \textsc{Go}/\textsc{No-Go}/\textsc{Abstain} under thresholds
+$(\delta,\kappa)$, with observable/hidden controls for sensitivity and
+specificity. Identified-model features $f_\phi$ are optional inputs to Stage~2.}
+\label{fig:audit}
+\end{figure}
+
+Average response accuracy does not determine whether a learned adapter is worth
+deploying (Figure~\ref{fig:audit}). The decision depends on three distinct
+quantities: whether alternative commands can help at the same state, whether
+their treatment effects are predictable from deployment-time information, and
+whether state-conditioned allocation beats issuing the same commands at the same
+frequencies without conditioning. We formalize these quantities before introducing
+any particular adapter.
+
+Let $x$ denote the observable query context (observation and task target),
+$a_0$ the direct command, and $\mathcal A$ a finite intervention set. Let
+$Y_x(a)=(W_x(a),T_x(a),S_x(a))$ be the potential mechanical work, completion
+time, and success after taking intervention $a$ and following a common
+continuation. For a time budget $\rho$, candidate $a$ is eligible when
+\begin{equation}
+E_x(a)=\mathbf{1}\!\left[S_x(a)\ge S_x(a_0),\;
+T_x(a)\le\rho T_x(a_0)\right]=1 .
+\label{eq:audit-eligible}
+\end{equation}
+In simulation we observe these potential outcomes by exact start-state replay;
+without reset access they must instead be estimated from randomized or logged
+interventions, a limitation we return to in Section~\ref{sec:limitations}.
+
+\textbf{Available headroom.}
+The best fixed action
+$a^{\rm g}=\arg\min_{a\in\mathcal A}\mathbb E_x[W_x(a)]$ (subject to the
+declared aggregate constraints) measures global operating-point gain
+$H_{\rm global}=1-\mathbb E W_x(a^{\rm g})/\mathbb E W_x(a_0)$.
+The same-state oracle $\pi^\star(x)=\arg\min_{a:E_x(a)=1}W_x(a)$ instead measures
+the full local opportunity present in $\mathcal A$:
+\begin{equation}
+H_{\rm avail}=1-\frac{\mathbb E_x[W_x(\pi^\star(x))]}
+{\mathbb E_x[W_x(a_0)]}.
+\label{eq:havailable}
+\end{equation}
+This is an oracle diagnostic, not a deployable controller.
+
+\textbf{Recovered and allocation value.}
+A selector $\hat\pi(z(x))$ is cross-fitted across independent source seeds from
+deployment features $z$; these may contain only observations or append identified
+response predictions. Its total recovered gain is
+$H_{\rm total}=1-\mathbb E W_x(\hat\pi(x))/\mathbb E W_x(a_0)$.
+Total gain alone is insufficient because any selector can improve simply by
+issuing a globally cheaper scale more often. We therefore construct
+$\mu_{\hat\pi}$, which draws actions independently of $x$ with exactly the
+marginal frequencies
+$p_a=\Pr_x[\hat\pi(x)=a]$ of the learned selector. The state-allocation value is
+\begin{equation}
+H_{\rm alloc}=1-\frac{\mathbb E_x[W_x(\hat\pi(x))]}
+{\mathbb E_{x,a\sim p}[W_x(a)]}.
+\label{eq:halloc}
+\end{equation}
+Only $H_{\rm alloc}>0$ is evidence that conditioning commands on context adds
+value beyond a matched non-adaptive mixture. We separately report the realized
+constraint-violation rate
+$q=\Pr_x[E_x(\hat\pi(x))=0]$.
+
+\textbf{Three-way deployment decision.}
+Because a statistically positive but operationally negligible gain does not
+justify an adapter, the deployer specifies a minimum practical allocation value
+$\delta$ and maximum violation rate $\kappa$. We cluster-bootstrap whole source
+seeds, yielding confidence intervals $[L_H,U_H]$ for $H_{\rm alloc}$ and
+$[L_q,U_q]$ for $q$. The audit returns
+\begin{equation}
+\begin{aligned}
+\textsc{Go}&:\ L_H>\delta\ \land\ U_q\le\kappa,\\
+\textsc{No-Go}&:\ U_H<\delta\ \lor\ L_q>\kappa,\\
+\textsc{Abstain}&:\ \text{otherwise}.
+\end{aligned}
+\label{eq:audit-decision}
+\end{equation}
+The abstention region is essential: an underpowered audit is not evidence that
+an adapter is unnecessary. We report threshold sensitivity rather than selecting
+$\delta$ after observing the result.
+
+\textbf{Reusable protocol.}
+Before data collection, an audit instantiation declares
+$(\mathcal A,W,E,\delta,\kappa)$ and the independent deployment unit to be
+resampled. It then (i) measures the fixed operating-point frontier,
+(ii) obtains paired potential outcomes on representative query contexts,
+(iii) cross-fits candidate selectors from deployment-available representations
+and evaluates each against its frequency-matched mixture, and (iv) applies
+Eq.~\ref{eq:audit-decision} together with observable- and hidden-signal controls.
+This protocol is domain-independent; exact replay, mechanical work, and command
+scales are the locomotion instantiation used here.
+
 \subsection{Viability-Gated Compensation}
 \label{sec:vgcc}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{vgfc_method.png}
+\caption{VGCC overview (case study under the audit). Offline excitation rollouts
+train an observation-conditioned response model. Online, the model scores a
+structured candidate set around the direct command; a priority-ordered gate
+applies a bounded correction only when progress, posture, and cost-margin checks
+pass, and otherwise uses exact direct fallback.}
+\label{fig:method}
+\end{figure}
 
 VGCC scores a structured candidate set built around the direct command:
 uniform scalings of $c_{\text{goal}}$ (factors $0.4$ to $1.2$), yaw-rate offsets,
@@ -458,58 +457,37 @@ $c_{\text{exec}}=c_{\text{goal}}+\alpha_t\,(c^\ast-c_{\text{goal}})$, with gain
 $\alpha_t=\alpha\operatorname{clip}(d/d_{\text{anneal}},0,1)$ that anneals to
 zero as the remaining distance $d$ shrinks, so corrections fade out on final
 approach. The executed command therefore always lies between the strong direct
-command and a model-certified candidate; scoring the raw candidate rather than
-the blend is a deliberate simplification whose consequence is limited by the
-bounded gain.
+command and a model-certified candidate. Scoring the raw candidate (not the
+blend) is a simplification whose error is limited by the bounded gain.
 
 \textbf{Progress floor as a slowdown bound.}
 Predicted target progress is
 \begin{equation}
 \hat{G}(c) \;=\; \lVert g \rVert \;-\; \bigl\lVert g - (\widehat{\Delta x}(c), \widehat{\Delta y}(c)) \bigr\rVert .
 \end{equation}
-A candidate $c$ is \emph{eligible} when it keeps most of direct control's
-progress and leaves posture viable:
+A candidate is eligible when it preserves most of direct progress and posture:
 \begin{equation}
 \hat G(c)\ge\beta\,\hat G(c_d),\qquad
 \hat h_{\min}(c)\ge h_{\rm floor},\qquad
 \hat h_{\rm mean}(c)\ge h_{\rm now}-\delta,
 \label{eq:vgc-eligible}
 \end{equation}
-where $c_d=c_{\text{goal}}$ denotes the direct command.
-Because the prediction horizon has a fixed duration, $\hat G(c)$ is progress
-\emph{per unit time}, so the progress floor is directly a bound on how much an
-accepted candidate may slow the robot down: with $\beta=0.9$, it must
-advance at least $90\%$ as fast as direct control within the horizon, capping the
-instantaneous slowdown at roughly $10\%$. This constraint is the mechanism that
-keeps VGCC from collapsing into the trivial ``just walk slower'' solution, and
-Section~\ref{sec:results-baselines} shows empirically that removing it does exactly
-that.
+with $c_d=c_{\text{goal}}$. Because the horizon has fixed duration, $\beta=0.9$
+caps instantaneous slowdown at roughly $10\%$ and blocks the trivial ``walk
+slower'' solution; removing it does exactly that
+(Section~\ref{sec:results-ablation}).
 
 \textbf{Cost objective and margin.}
-Among eligible candidates, VGCC selects the one with the lowest predicted
-horizon cost, $c^\ast=\arg\min_{c\,\text{eligible}}\hat C(c)$, and activates
-compensation only if the predicted saving clears a relative margin,
+Among eligible candidates, VGCC selects
+$c^\ast=\arg\min_{c\,\text{eligible}}\hat C(c)$ and intervenes only if
 \begin{equation}
-\hat C(c^\ast) < (1-\epsilon)\,\hat C(c_d),
+\hat C(c^\ast) < (1-\epsilon)\,\hat C(c_d).
 \label{eq:vgc-cost}
 \end{equation}
-and otherwise executes $c_d$ exactly. The division of labor between the two
-tests matters: predicted cost alone can always be lowered by slowing down, so
-the anti-slowdown guard is the progress floor in
-Eq.~\ref{eq:vgc-eligible}, which restricts the argmin to candidates that give up
-at most a fraction $1{-}\beta$ of direct control's speed, while the margin
-$\epsilon$ demands that what remains is a strict predicted saving rather than
-model noise. An intervention is admitted only when it is both no more than
-marginally slower \emph{and} predicted cheaper by a margin: an efficiency gain
-within a bounded slowdown, not a slowdown dressed up as one. Whether that bounded
-slowdown nevertheless accounts for the realized savings is an empirical question,
-answered with slowdown-invariant metrics in Section~\ref{sec:results-baselines}.
-A seemingly more principled alternative, normalizing predicted cost by predicted
-progress so that the objective itself is a cost-of-transport surrogate, performs
-\emph{worse} in a paired ablation (Appendix~\ref{app:ablation}): with the floor
-already bounding slowdown, the extra normalization double-penalizes slower
-candidates and suppresses most of the compensation the gate would otherwise
-certify.
+The progress floor bounds slowdown; $\epsilon$ rejects model noise. Normalizing
+cost by predicted progress performs worse in a paired ablation
+(Appendix~\ref{app:ablation}): with the floor already present, the extra
+normalization over-suppresses compensation.
 
 \textbf{Posture rescue and restore.}
 Two reflexes complete the controller. If the model predicts that even the direct
@@ -524,57 +502,24 @@ thus a veto on candidate commands, not an unconstrained optimizer. All scalars
 are selected on development seeds and frozen before confirmation;
 Appendix~\ref{app:impl} lists their values.
 
-\begin{algorithm}[t]
-\caption{Viability-Gated Command Compensation (one high-level step)}
-\label{alg:vgcc}
-\begin{algorithmic}[1]
-\Require frozen policy $\pi_\theta$, response model $f_\phi$, target $g$, correction gain $\alpha$, anneal distance $d_{\text{anneal}}$, and fixed scalars $(\beta,h_{\rm floor},h_{\rm resc},\delta,\epsilon)$
-\State Compute body-frame target $g$, direct command $c_{\text{goal}}$ (Eq.~\ref{eq:cgoal}), and the candidate set $\mathcal{C}$ around $c_{\text{goal}}$
-\State Batch-predict $f_\phi(o,c)$ for all $c\in\mathcal{C}$; set $\alpha_t=\alpha\operatorname{clip}(d/d_{\text{anneal}},0,1)$
-\If{measured posture is below the operating band}
-  \State $c\gets c_{\text{goal}}$ \Comment{restore}
-\ElsIf{direct control is predicted to breach the posture floor $h_{\rm resc}$}
-  \State $c^\ast\gets\arg\max_{\mathcal{C}:\,\hat G\ge 0}\hat h_{\min}$;\quad $c\gets c_{\text{goal}}+\alpha_t(c^\ast-c_{\text{goal}})$ \Comment{rescue}
-\Else
-  \State $c^\ast\gets\arg\min_{\mathcal{C}\,\text{eligible (Eq.~\ref{eq:vgc-eligible})}}\hat C$
-  \If{$\hat C(c^\ast)<(1-\epsilon)\,\hat C(c_{\text{goal}})$ (Eq.~\ref{eq:vgc-cost})}
-    \State $c\gets c_{\text{goal}}+\alpha_t(c^\ast-c_{\text{goal}})$ \Comment{compensate}
-  \Else
-    \State $c\gets c_{\text{goal}}$ \Comment{exact direct fallback}
-  \EndIf
-\EndIf
-\State Execute $\pi_\theta$ with $c$ for $E$ low-level steps
-\end{algorithmic}
-\end{algorithm}
-
-Comparing a structured single-step candidate set, rather than optimizing freely
-over the command box or planning over a long horizon, is a deliberate choice. The
-response model is reliable for the local, near-stationary consequences of a
-command (Section~\ref{sec:results-model}) but not for compounding predictions
-over a long horizon, and the margin $\epsilon$ exists precisely because ranking
-many similar candidates sits at the edge of its accuracy. The gated comparison
-uses the model only where it is trustworthy, to decide whether a cheaper
-certified command exists right now, and leans on the exact fallback everywhere
-else.
+Pseudocode is given in Appendix~\ref{app:impl} (Algorithm~\ref{alg:vgcc}). The one-step gated comparison is intentional: $f_\phi$ is accurate for local near-stationary consequences (Section~\ref{sec:results-model}) but not for long-horizon compounding, and $\epsilon$ abstains when ranking sits at the edge of that accuracy. Section~\ref{sec:results-headroom} audits whether average accuracy suffices for counterfactual ranking.
 
 \section{Experiments}
 \label{sec:results}
 
-The experiments follow the structure of the method. \textbf{Q1 (identification,
-the core method)}: how accurately and how cheaply can the closed-loop command
-response be identified, and what labeling makes it work
-(Section~\ref{sec:results-model})? \textbf{Q2 (application)}: does a compensator
-built on the identified model improve the deployed proportional baseline, and does a
-single configuration transfer across the command space and across embodiments
-(Sections~\ref{sec:results-main} and~\ref{sec:results-coverage})? \textbf{Q3
-(the boundary, and the paper's central finding)}: how does the compensator compare to
-the strongest simple alternatives (a per-robot-tuned fixed command scale, a reactive
-governor, and a same-budget sampling MPC), and, underneath those comparisons, how much
-state-dependent efficiency structure does the command interface expose at all
-(Sections~\ref{sec:results-baselines}--\ref{sec:results-headroom})? Q1 establishes the
-method; Q2 shows what the identified model lets us \emph{do}; Q3 shows what it lets us
-\emph{conclude}. The conclusion, that a tuned fixed scale is within $2\%$ of an
-omniscient per-episode oracle, is the result we consider most important.
+Experiments answer three questions in the order needed by the audit.
+\textbf{Q1}: how accurately can the closed-loop command response be identified
+(Section~\ref{sec:results-model})?
+\textbf{Q2}: as a case-study adapter, how does VGCC compare with proportional
+control, tuned fixed scaling, a reactive governor, and sampling MPC
+(Sections~\ref{sec:results-main}--\ref{sec:results-baselines}, with coverage in
+Section~\ref{sec:results-coverage})?
+\textbf{Q3 (central)}: how much same-state headroom exists, how much is
+recoverable beyond a frequency-matched mixture, and what deployment decision does
+the audit return (Section~\ref{sec:results-headroom})?
+Q1 establishes the optional feature source; Q2 places concrete adapters on the
+efficiency frontier; Q3 is the paper's main claim---existence versus
+recoverability versus allocation.
 
 \subsection{Setup}
 \label{sec:setup}
@@ -774,50 +719,40 @@ Cost of transport & 0.754 & 0.805 & $-6.3\%$ \\
 \subsection{Strong Baselines}
 \label{sec:results-baselines}
 
-A tuned fixed command scale is the simplest efficiency heuristic and a demanding
-baseline. We compare against it, a reactive governor, and direct control on a locked
-six-seed evaluation with the torque-derived power channel. Every method is evaluated
-from \emph{identical} initial states (paired resets) so the comparison is
-within-condition, and VGCC is shown under both cost channels, the effort proxy and
-mechanical power, so the result does not depend on which channel is optimized
-(Table~\ref{tab:objective-audit}, Figure~\ref{fig:frontier}). We include two fixed
-scales: $0.90$ closely matches VGCC's completion time and is the sharpest iso-time
-competitor, and $0.75$ traces the slow, low-COT end of the frontier.
+A tuned fixed command scale is the simplest efficiency heuristic and the
+frontier any learned adapter must justify crossing. We compare against it, a
+reactive governor, and direct control on a locked six-seed evaluation with
+torque-derived power, all from identical initial states. VGCC is shown under both
+cost channels so the result does not depend on which channel is optimized
+(Table~\ref{tab:objective-audit}, Figure~\ref{fig:frontier}). Fixed $0.90$ is the
+sharpest iso-time competitor; fixed $0.75$ traces the slow, low-COT end.
 
-The result both supports and bounds the paper's claim. Under the paired protocol,
-both VGCC channels reduce mechanical work ($5.1\%$), power ($16\%$), and cost of
-transport ($3.9\%$) below direct control, with the COT reduction negative on all six
-seeds and the highest success of any method ($0.802$ vs.\ $0.792$); this is consistent
-with Table~\ref{tab:physical-energy}. What VGCC does \emph{not} do is dominate the
-fixed-scaling frontier. At essentially matched time, fixed $0.90$ reaches a lower COT
-than VGCC ($0.724$ vs.\ $0.737$, lower on five of six seeds), and fixed $0.75$ the
-lowest COT of all ($0.685$) at a $38\%$ time penalty. VGCC sits just above this
-frontier (Figure~\ref{fig:frontier}).
+VGCC reduces mechanical work ($5.1\%$), power ($16\%$), and COT ($3.9\%$) below
+direct control, with the highest success of any method ($0.802$ vs.\ $0.792$).
+It does \emph{not} dominate the fixed-scaling frontier: at matched time, fixed
+$0.90$ reaches lower COT ($0.724$ vs.\ $0.737$), and fixed $0.75$ the lowest COT
+($0.685$) at a $38\%$ time penalty. VGCC sits just above this frontier
+(Figure~\ref{fig:frontier}).
 
-A more elaborate use of the model does not close the gap. A same-budget sampling MPC,
-which plans recursively over the scales $\{0.75,0.90,1.0\}$ with the identified model
-instead of applying VGCC's viability gate (Appendix~\ref{app:impl}), was run paired
-on three of the six seeds.
-It reaches COT $0.757$, below direct control ($0.765$) but above both VGCC ($0.736$)
-and fixed $0.90$ ($0.721$). Planning more elaborately over the same model beats
-neither the fixed scale nor VGCC, for the reason Section~\ref{sec:results-headroom}
-makes precise. We therefore do not claim VGCC beats a well-tuned fixed scale on cost
-of transport; its value lies instead in one configuration that needs no per-robot
-scale selection and transfers across the command space and embodiments
-(Section~\ref{sec:results-coverage}).
+A heavier baseline does not close the gap. An 81-sequence sampling MPC plans four
+high-level steps over $\{0.75,0.90,1.0\}$ with a separately trained recursive
+macro-transition ensemble and task-value model (Appendix~\ref{app:impl}). On three
+of the six seeds it reaches COT $0.757$---below direct ($0.765$) but above VGCC
+($0.736$) and fixed $0.90$ ($0.721$). We therefore do not claim VGCC beats a well-tuned fixed scale. The remaining
+questions are transfer of the same configuration
+(Section~\ref{sec:results-coverage}) and whether state-conditioned allocation can
+justify adapter complexity over this frontier
+(Section~\ref{sec:results-headroom}).
 
-\textbf{Is the gain just a slowdown?} No. The metrics we headline are
-slowdown-invariant: cost of transport and work per meter measure energy per
-\emph{distance}, so walking the same path with the same gait more slowly leaves them
-unchanged, and VGCC's reductions therefore require a genuinely cheaper gait. The
-progress floor $\beta=0.9$ also bounds the per-step slowdown and is load-bearing:
-removing it deepens the proxy saving from $12.2\%$ to $19.6\%$ but costs $3.7$ success
-points (Appendix~\ref{app:ablation}). The slowdown that remains is selective, so VGCC
-lengthens episodes by $17\%$ where the fixed $0.75$ scale pays $40\%$.
+\textbf{Is the gain just a slowdown?} COT and work per meter remove the trivial
+effect of traveling less distance, but are not generally speed-invariant. The
+progress floor is load-bearing: removing it deepens the proxy saving from $12.2\%$
+to $19.6\%$ but costs $3.7$ success points (Appendix~\ref{app:ablation}). VGCC
+lengthens episodes by $17\%$ where fixed $0.75$ pays $40\%$.
 
 \begin{table}[t]
 \centering
-\caption{Locked frontier comparison on six seeds ($n=96$/method), ordered by completion time. All six methods are evaluated from \emph{identical} initial states (paired resets), so the differences are within-condition. VGCC is shown under both cost channels. Bold marks the best value in each column. VGCC reduces work, power, and COT relative to direct control and attains the highest success, but a per-robot-tuned fixed scale traces a lower COT--time frontier: fixed $0.90$ reaches a lower COT at matched time, and fixed $0.75$ the lowest COT of all at a $38\%$ time cost. A same-budget sampling MPC is discussed in the text.}
+\caption{Locked frontier comparison on six seeds ($n=96$/method), ordered by completion time. All six methods are evaluated from \emph{identical} initial states (paired resets), so the differences are within-condition. VGCC is shown under both cost channels. Bold marks the best value in each column. VGCC reduces work, power, and COT relative to direct control and attains the highest success, but a per-robot-tuned fixed scale traces a lower COT--time frontier: fixed $0.90$ reaches a lower COT at matched time, and fixed $0.75$ the lowest COT of all at a $38\%$ time cost. A heavier recursive sampling MPC with separate transition and terminal-value models is discussed in the text.}
 \label{tab:objective-audit}
 \begin{tabular}{lrrrrr}
 \toprule
@@ -836,131 +771,17 @@ reactive governor & 0.771 & 128.51 & 44.69 & 2.947 & 0.740 \\
 \begin{figure}[t]
 \centering
 \includegraphics[width=0.72\linewidth]{frontier.png}
-\caption{Cost of transport versus completion time on six locked seeds (Go2 harder targets, $n=96$/method, identical initial states). The dashed line is the frontier traced by the direct policy and two fixed command scales. VGCC reduces COT relative to direct control but sits just above the fixed-scaling frontier, while attaining the highest success ($0.80$). The reactive governor is dominated. VGCC's advantage is not frontier dominance but that a single configuration reaches this near-frontier operating point with no pre-selected scale, keeps the highest success, and (Section~\ref{sec:results-coverage}) transfers across the command space and across embodiments, where a fixed scale must be chosen per robot and per deadline in advance. The narrow vertical spread of all methods anticipates Section~\ref{sec:results-headroom}: even an omniscient per-episode oracle barely improves on the fixed scale (Figure~\ref{fig:finding}), so this band is close to all that command scaling can buy.}
+\caption{Cost of transport versus completion time on six locked seeds (Go2 harder targets, $n=96$/method, identical initial states). The dashed line is the frontier traced by the direct policy and two fixed command scales. VGCC reduces COT relative to direct control but sits just above the fixed-scaling frontier, while attaining the highest success ($0.80$). The reactive governor is dominated. VGCC's advantage is not frontier dominance but that a single configuration reaches this near-frontier operating point with no pre-selected scale, keeps the highest success, and (Section~\ref{sec:results-coverage}) transfers across the command space and across embodiments. Section~\ref{sec:results-headroom} audits whether a learned state-conditioned allocation can justify its complexity over this frontier.}
 \label{fig:frontier}
 \end{figure}
-
-\subsection{A Narrow Efficiency Frontier}
-\label{sec:results-headroom}
-
-\begin{figure}[t]
-\centering
-\includegraphics[width=\linewidth]{finding.png}
-\caption{The paper's central finding, on paired-successful episodes (identical initial states). \textbf{(a)} The COT-optimal command scale is nearly the same in every episode: a single scale is optimal in $74$--$78\%$ of episodes on both robots, so there is little for a scale selector to specialize to. \textbf{(b)} Cost of transport relative to the best single fixed scale ($=1$): an \emph{omniscient} per-episode oracle that picks the best scale for every episode lies only $1.0\%$ (Go2) and $1.9\%$ (H1) below that fixed scale; the entire shaded band is the episode-level adaptivity headroom available to scale selection. VGCC and direct control sit above the fixed scale, not because they model the policy poorly but because the headroom they compete for is nearly empty.}
-\label{fig:finding}
-\end{figure}
-
-The comparisons so far are between specific controllers. The identified model lets us
-ask the question underneath them, the one that determines whether a
-state-conditioned command-scaling controller can succeed here: how much
-situation-dependent efficiency structure does the policy's command interface expose?
-If the efficiency-optimal command scale is nearly the same in every situation, then
-no state-conditioned gate, however good its model, can beat a single well-chosen
-scale, and learned command-scaling compensation has a low ceiling.
-We measure the episode-level component of that ceiling directly.
-
-For every episode we have the ground-truth cost of transport of the direct command
-($1.0$), fixed $0.90$, and fixed $0.75$ from identical initial states. We compare the
-best single \emph{global} scale (minimizing pooled COT) against an \emph{oracle} that
-picks the best scale \emph{per episode}. The oracle upper-bounds what any selector
-that holds one scale from this set for the whole episode could extract; the gap
-between it and the best global scale is the episode-level adaptivity headroom that
-exists to be won. A per-step switch (VGCC) or plan (the sampling MPC) is not
-formally bounded by an episode-level oracle, but neither undercuts even the best
-fixed scale in Table~\ref{tab:objective-audit}, let alone the oracle. Corrections
-outside the scale family are not searched by the oracle; VGCC's candidate set does
-include redirected and re-timed variants, and their availability does not change
-its position against the fixed scales.
-
-That headroom is almost nothing (Figure~\ref{fig:finding}): the per-episode oracle
-improves on the best single scale by only $1.0\%$ on Go2 ($n=72$ fully successful
-paired episodes; episode-bootstrap $95\%$ CI $[0.5, 1.7]\%$) and $1.9\%$ on H1
-($n=197$; CI $[1.1, 3.0]\%$). The per-episode winners show why: the
-most aggressive available slowdown wins $78\%$ of Go2 episodes and $74\%$ of H1
-episodes, and COT falls monotonically as the scale drops, so the efficiency-optimal
-command is a near-constant global slowdown, not an episode-dependent choice. This single
-measurement explains the entire pattern of results in this section: VGCC lands just
-above the fixed scale, the sampling MPC lands even further off, and the reactive
-governor is dominated, not because any of them models the policy poorly, but because
-the situational structure they exist to exploit is nearly absent. There is a
-structural reason to expect exactly this: the policy was trained to track
-commands robustly across terrains and states, and robustness \emph{is}
-insensitivity, so a well-trained tracking policy actively suppresses the
-state-dependence a command-level efficiency selector would need. The interface
-exposes little structure because the training objective worked. The identification method that a practitioner would use to
-\emph{attempt} the compensation is thus also the cheapest instrument for discovering,
-in advance, that the compensation is not worth deploying: on this policy class, a
-well-chosen fixed command scale is within $2\%$ of the per-episode optimum, and
-command-scaling efficiency compensation is a solved, low-ceiling problem.
-
-\textbf{Does terrain heterogeneity open the frontier?}
-A natural conjecture is that mixed terrain would: if rough ground rewards
-slowing more than flat ground does, a terrain-conditioned scale should beat any
-single fixed one across a mixed deployment. We test this directly with two
-single-terrain-type variants of the same environment, a flat plane and a
-uniformly rough field ($2$--$10$\,cm height noise), the same pretrained policy
-and protocol, a response model re-identified on the mixture with the unchanged
-recipe, and the scale grid extended to $0.60$ (three fresh seeds, eight targets,
-two trials, paired resets; $48$ episodes per scale per terrain). Because the
-world-frame final-height criterion is dominated by stop-point ground elevation on
-$\pm10$\,cm noise, completion here means reaching the target without early
-termination. Table~\ref{tab:hetero} shows the outcome: cost of transport falls
-monotonically with the scale on \emph{both} terrains, so the efficiency-optimal
-scale is the bottom of the grid everywhere and the winner never flips. Terrain
-shifts the \emph{level} of the cost curve but hardly its \emph{shape} over
-commands, which is the mechanism above made visible. Coupling the two terrains
-with a shared completion-time budget, so that a deadline forces choosing
-\emph{where} to slow down, changes little: allocating scales by terrain (slower
-on rough, faster on flat) beats the best budget-feasible uniform scale by at most
-$1.6\%$ of total work (bootstrap $95\%$ CI $[0.8, 8.4]$) at the tightest
-budgets, and by nothing once the budget permits slowing everywhere. The
-re-identified VGCC configuration behaves as on the main benchmark, tracking but
-not undercutting the best fixed scale on either terrain. The conjectured
-mechanism does not open the frontier on the roughness axis, with or without a
-deadline.
-
-\begin{table}[t]
-\centering
-\caption{Single-terrain-type paired evaluation (Go2, three seeds, eight targets $\times$ two trials; completion = target reached without early termination; flat $n=48$, rough $n=36$ jointly completed episodes per scale, of 48 evaluated). COT falls monotonically with the scale on both terrains: roughness raises the cost level but barely moves where its minimum lies over commands, so no fixed-scale winner flips between terrains.}
-\label{tab:hetero}
-\begin{tabular}{lcccccc}
-\toprule
-& \multicolumn{3}{c}{Flat} & \multicolumn{3}{c}{Rough ($2$--$10$\,cm)} \\
-\cmidrule(lr){2-4}\cmidrule(lr){5-7}
-Scale & COT & Work (J) & Time (s) & COT & Work (J) & Time (s) \\
-\midrule
-1.00 & 1.027 & 179.6 & 1.80 & 1.670 & 290.5 & 2.16 \\
-0.90 & 0.964 & 166.7 & 1.99 & 1.598 & 278.5 & 2.30 \\
-0.75 & 0.897 & 152.6 & 2.36 & 1.513 & 265.2 & 2.76 \\
-0.60 & 0.882 & 148.8 & 2.90 & 1.447 & 247.8 & 3.31 \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-We are careful about scope. This bound is measured on rough-terrain reaching with
-these three policies. It is specific to what the
-oracle searches: episode-constant scales from the grid a deployment
-would sweep. Both the best fixed scale and the oracle move together with a denser or
-lower grid, so the headline figures are grid-specific, and within-episode
-schedules, which an episode-level oracle does not bound, are probed only at
-development scale (Section~\ref{sec:limitations}). Terrain axes we did not vary,
-slopes, compliance, or friction, could in principle reshape rather than merely
-shift the cost curve, and interfaces richer than a velocity scaling, such as gait
-parameters~\citep{margolis2022walk}, are exactly where the tracking objective has
-not flattened the structure. The contribution here is not that
-adaptivity can never help, but that its headroom is measurable, and on the
-standard benchmark, and on the mixed-terrain deployments built from it, that
-headroom is small.
 
 \subsection{Coverage and Transfer}
 \label{sec:results-coverage}
 
-A compensation layer should improve efficiency where the base policy is wasteful
-and avoid degrading it where the base policy is strong, using one configuration.
-Table~\ref{tab:coverage} evaluates the frozen configuration on the remaining Go2
-target families and on two further robots, testing whether the single closed-loop
-configuration improves on direct control everywhere without per-family or per-robot
-objective tuning.
+Before auditing recoverability, we check whether the VGCC case study is a
+Go2-harder artifact. Table~\ref{tab:coverage} evaluates the frozen configuration
+on remaining Go2 target families and two further robots, without per-family or
+per-robot objective tuning.
 
 \begin{table}[t]
 \centering
@@ -1005,23 +826,16 @@ seeds. Since no gate or objective parameter was adjusted, this is consistent wit
 cross-quadruped effect rather than a Go2-only artifact. A single robot and three
 seeds are nevertheless insufficient to establish broad embodiment generality.
 
-\textbf{H1 humanoid: the one morphology-dependent component is the posture floor.}
-Transferring VGCC to the humanoid is not zero-shot. With the quadruped posture
-thresholds applied unchanged, VGCC's own model-selected aggressive commands drive
-the tall, high-inertia H1 into posture collapse on the long forward and diagonal
-targets, costing success (the $2$\,m target falls to $0.47$): the loose quadruped
-floors permit commands that a much higher center of mass and smaller support region
-cannot sustain, so the failure is loss of balance, not a cost misprediction. The
-remedy is morphological, not a re-tuning of the objective: tightening the
-eligibility, rescue, and restore posture thresholds while leaving every non-posture
-parameter, including the cost margin, identical to the quadruped configuration. With
-the floors adapted, VGCC reduces the H1 effort proxy by $4.7\%$ with success
-$0.967$ vs.\ $0.975$ and the paired effort difference negative on all three seeds
-($-3.4\%$, $-3.9\%$, $-6.7\%$). Because the thresholds were changed after observing
-the failure, this row is morphology-adapted evidence, not zero-shot transfer, and
-needs confirmation on fresh humanoid tasks. The posture floor is thus the single
-component that depends on morphology; the objective, cost margin, model
-architecture, and correction gain are shared unchanged across all three robots.
+\textbf{H1 humanoid: posture floors are morphology-dependent.}
+Transfer is not zero-shot. With quadruped posture thresholds unchanged, VGCC's
+aggressive model-selected commands collapse H1 posture on long forward/diagonal
+targets (the $2$\,m target falls to $0.47$): a taller COM and smaller support
+region cannot sustain the loose floors. Tightening eligibility, rescue, and
+restore thresholds---leaving the objective, cost margin, architecture, and
+correction gain unchanged---recovers a $-4.7\%$ effort-proxy reduction with
+success $0.967$ vs.\ $0.975$ and negative paired differences on all three seeds.
+Because thresholds were changed after observing the failure, this is
+morphology-adapted evidence, not zero-shot transfer.
 
 \subsection{Ablations}
 \label{sec:results-ablation}
@@ -1036,134 +850,265 @@ model's well-behaved posture regime, the progress floor limits behavioral drift,
 and bounded blending avoids the success cost of substitution. Quarter-data
 identification retains displacement $R^2=0.92$ but halves the realized proxy
 reduction, tracking the cost-channel degradation in Section~\ref{sec:results-model}.
+These results explain \emph{how} VGCC achieves its direct-control improvement; they
+do not show that the improvement is state-allocation value. That distinction is
+the audit next.
+
+\subsection{Adapter Necessity Audit}
+\label{sec:results-headroom}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{finding.png}
+\caption{Stage 1 of the adapter necessity audit, on paired-successful episodes (identical initial states). \textbf{(a)} The COT-optimal command scale is nearly the same in every episode: a single scale is optimal in $74$--$78\%$ of episodes on both robots. \textbf{(b)} Cost of transport relative to the best single fixed scale ($=1$): a finite-grid per-episode oracle lies only $1.0\%$ (Go2) and $1.9\%$ (H1) below that fixed scale. This is an episode-level diagnostic over three scales, not an upper bound on within-episode switching or commands outside the grid.}
+\label{fig:finding}
+\end{figure}
+
+Controller ranking alone cannot tell us whether an adapter failed because no
+state-dependent improvement exists or because its representation could not
+recover one. We therefore audit adapter necessity in three stages. Stage 1
+measures \emph{global versus episode-level} variation with paired full episodes.
+Stage 2 uses exact replay to measure \emph{same-state} counterfactual headroom.
+Stage 3 cross-fits a treatment-effect selector and compares it with a randomized
+mixture that uses exactly the same commands at the same marginal frequencies.
+Only improvement over that mixture is evidence that conditioning on state adds
+value.
+
+For every episode we have the ground-truth cost of transport of the direct command
+($1.0$), fixed $0.90$, and fixed $0.75$ from identical initial states. We compare the
+best single \emph{global} scale (minimizing pooled COT) against a finite-grid oracle that
+picks the best scale \emph{per episode}. The oracle upper-bounds what any selector
+that holds one scale from this set for the whole episode could extract; the gap
+between it and the best global scale is the episode-level adaptivity headroom that
+exists to be won. A per-step switch (VGCC) or plan (the sampling MPC) is not
+formally bounded by an episode-level oracle, but neither undercuts even the best
+fixed scale in Table~\ref{tab:objective-audit}, let alone the oracle. Corrections
+outside the scale family are not searched by the oracle; VGCC's candidate set does
+include redirected and re-timed variants, and their availability does not change
+its position against the fixed scales.
+
+The episode-level gap is small (Figure~\ref{fig:finding}): the per-episode oracle
+improves on the best single scale by only $1.0\%$ on Go2 ($n=72$ fully successful
+paired episodes; episode-bootstrap $95\%$ CI $[0.5, 1.7]\%$) and $1.9\%$ on H1
+($n=197$; CI $[1.1, 3.0]\%$). H1 here is a second-embodiment Stage~1 screen with
+the same three-scale grid: the same near-constant global slowdown pattern.
+Stages~2--3 exact-replay confirmation on H1 is reported below. The per-episode
+winners show why: the most aggressive available slowdown wins $78\%$ of Go2
+episodes and $74\%$ of H1 episodes, and COT falls monotonically as the scale
+drops, so the efficiency-optimal command is a near-constant global slowdown, not
+an episode-dependent choice. This result alone does \emph{not} bound
+within-episode switching, redirected commands, or a richer command set. It is a
+cheap first screen: if a deployment only permits one scale per episode, learning
+a selector over this grid is unlikely to repay its complexity.
+
+\textbf{Stages 2--3: does local headroom exist, and is it recoverable?}
+We next isolate a single intervention from long-horizon controller effects.
+At 480 query states from ten source seeds, each candidate prefix
+$s\in\{0.75,0.90,1.00\}$ is replayed from the \emph{same} observation and then
+followed by the same direct-control continuation. Replay is exact after freezing
+the terrain curriculum: the query-observation reconstruction error is zero.
+A candidate is eligible only if its realized success is no worse than direct
+and its remaining completion time is at most $1.10$ times direct. The
+same-state oracle then chooses the eligible prefix with minimum total mechanical
+work. Unlike the episode-level analysis, this test shows meaningful local
+variation: the oracle reduces work by $5.21\%$ while slightly increasing
+success ($0.698$ versus $0.681$).
+
+Existence is not predictability. We train a five-member treatment-effect ensemble
+to predict each candidate's work and time \emph{relative to direct}, using the
+deployment observation, target, and identified macro-response means and
+uncertainties. Every reported prediction is leave-one-source-seed-out. A
+conservative selector intervenes only when the work upper bound is negative,
+the time upper bound satisfies the budget, and the eligibility lower bound
+exceeds $0.5$. To separate state information from action frequency, its matched
+randomized mixture draws scales independently of state using the selector's
+own scale frequencies within each held-out fold.
+
+\begin{table}[t]
+\centering
+\caption{Adapter necessity audit on ten exact-replay source seeds (480 same-state queries, scales $\{0.75,0.90,1.00\}$, success no worse than direct, time $\le1.10\times$ direct). The local oracle shows available headroom; the cross-fitted selector measures recoverable headroom; the matched mixture attributes the part due only to issuing slower commands more often.}
+\label{tab:adapter-audit}
+\begin{tabular}{lccc}
+\toprule
+Audit quantity & Work vs.\ direct & Constraint violations & Interpretation \\
+\midrule
+same-state oracle & $-5.21\%$ & $0\%$ by construction & available local headroom \\
+LOSO learned selector & $-0.68\%$ & $2.08\%$ & total selected gain \\
+matched randomized mixture & $-0.13\%$ & $3.93\%$ & action-frequency gain \\
+selector vs.\ matched mixture & $-0.55\%$ & --- & state-allocation gain \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The learned selector activates on $13.3\%$ of queries and matches the oracle
+choice on $46.3\%$. Its candidate relative-work MAE is $11.6\%$, versus only
+$5.2\%$ total oracle headroom and $0.55\%$ recovered state-allocation gain.
+It beats the matched mixture on work in seven of ten held-out seeds, but the
+effect remains below one percent. With source-seed cluster bootstrap,
+$H_{\rm alloc}=0.55\%$ has a descriptive $95\%$ CI of $[0.14,1.03]\%$, and
+$q=2.08\%$ has CI $[1.04,3.33]\%$. For a deployer requiring $\delta=1\%$
+allocation value and allowing $\kappa=5\%$ violations, Eq.~\ref{eq:audit-decision}
+returns \textsc{Abstain} at every tested $\delta\in\{0.25\%,0.5\%,1\%\}$: the
+upper bound now reaches just above $1\%$, so a five-seed \textsc{No-Go} does not
+survive doubling the independent units. An observation-only selector on the same
+ten seeds is firmer at $\delta=1\%$ ($H_{\rm alloc}=0.41\%$ with CI
+$[0.16,0.68]\%$; \textsc{No-Go}), and adding the recursive macro predictions
+raises the point estimate only from $0.41\%$ to $0.55\%$. The five-seed feature
+ablation in Appendix~\ref{app:feature-ablation} reaches the same qualitative
+conclusion. Identification is therefore tested as an optional source of
+prospective decision features, rather than credited with a bound that a
+ground-truth sweep computes without it.
+
+\textbf{Second embodiment (H1 Stages~2--3).}
+We repeat the exact-replay protocol on the H1 humanoid with four source seeds
+(192 queries; replay observation error zero). Collection uses the same
+constant-scale prefixes; episode driving uses dimension-matched stub macro and
+task-value networks so that MPC plumbing can run, while the audit itself is
+\emph{observation-only} and does not depend on stub predictions
+(Appendix~\ref{app:impl}). At $\rho=1.10$ the same-state oracle reduces work by
+$4.18\%$ (success $0.927$ vs.\ $0.906$). A leave-one-seed-out observation
+selector recovers only $0.61\%$ versus direct and $0.33\%$ beyond its matched
+mixture ($H_{\rm alloc}$ CI $[0.04,0.66]\%$; $q=1.04\%$ with CI $[0.0,2.08]\%$;
+candidate work MAE $6.7\%$). At $\delta=1\%$ and $\kappa=5\%$ the audit returns
+\textsc{No-Go}---firmer than Go2's ten-seed \textsc{Abstain}, and consistent with
+Go2's observation-only \textsc{No-Go}. Thus the existence--recoverability gap is
+not a Go2 idiosyncrasy.
+
+\textbf{Can the audit ever return \textsc{Go}?}
+The Go2 real benchmark is a low-value case, so we fill the sensitivity/specificity
+gap with semi-synthetic controls that keep all 480 real query states, outcomes,
+and cross-seed splits (Figure~\ref{fig:audit-calibration};
+Table~\ref{tab:audit-calibration}). These calibrate the decision rule; H1 above
+is the second \emph{robot} domain. For the
+\emph{observable-signal} control, scale $0.90$ receives a fractional work bonus
+on nonnegative-lateral targets and scale $0.75$ otherwise; the pre-intervention
+target exposes which scale is preferred. We sweep the bonus $\gamma$ from $2\%$
+to $10\%$. A \emph{hidden-signal} control assigns the preferred scale per query
+and omits it from all features, creating oracle headroom no selector should
+systematically recover.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{audit_calibration.png}
+\caption{Calibration of the three-way decision on ten source seeds.
+\textbf{Left:} observable-signal sweep. Mean $H_{\rm alloc}$ exceeds
+$\delta=1\%$ by $\gamma=5\%$, and the gain-only rule ($L_H>\delta$, ignoring
+$q$) first returns \textsc{Go} at $\gamma=9\%$; the joint rule with
+$\kappa=5\%$ abstains throughout because stronger bonuses inflate the violation
+CI. Real outcomes ($\gamma=0$) abstain. \textbf{Right:} ten independent $5\%$
+hidden-signal mappings; false \textsc{Go} counts fall to zero at $\delta=1\%$.}
+\label{fig:audit-calibration}
+\end{figure}
+
+\begin{table}[t]
+\centering
+\caption{Calibration of the three-way decision (ten source seeds, 100{,}000 source-seed bootstrap replicates, $\delta=1\%$, $\kappa=5\%$). Observable-signal rows inject a known context-dependent work benefit into otherwise unchanged replay outcomes.}
+\label{tab:audit-calibration}
+\begin{tabular}{lccc}
+\toprule
+Condition & $H_{\rm alloc}$, 95\% CI & $q$, 95\% CI & Decision \\
+\midrule
+real outcomes & $0.55\ [0.14,1.03]\%$ & $2.08\ [1.04,3.33]\%$ & \textsc{Abstain} \\
+observable signal, $2\%$ & $0.53\ [0.17,0.87]\%$ & $3.12\ [1.88,4.38]\%$ & \textsc{No-Go} \\
+observable signal, $5\%$ & $1.26\ [0.75,1.78]\%$ & $4.58\ [2.50,7.29]\%$ & \textsc{Abstain} \\
+observable signal, $9\%$ & $2.32\ [1.67,2.98]\%$ & $5.42\ [3.75,7.08]\%$ & \textsc{Abstain} \\
+observable signal, $10\%$ & $2.61\ [1.85,3.30]\%$ & $5.42\ [3.54,7.50]\%$ & \textsc{Abstain} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Mean $H_{\rm alloc}$ exceeds $\delta=1\%$ once $\gamma=5\%$, and a gain-only
+rule ($L_H>\delta$, ignoring violations) first returns \textsc{Go} at
+$\gamma=9\%$ ($L_H=1.67\%$). The joint rule never returns \textsc{Go} in the
+tested $2\%$--$10\%$ range: stronger bonuses raise intervention rates and push
+$U_q$ above $\kappa$. The five-seed calibration that returned \textsc{Go} at
+$9\%$ therefore does not survive the larger cluster sample---a feature of the
+declared decision, not a detection failure. Ten independent $5\%$ hidden-signal
+mappings produce three false \textsc{Go} decisions at $\delta=0.25\%$, two at
+$0.5\%$, and zero at $1\%$ (four \textsc{No-Go}, six \textsc{Abstain}). Thus
+$1\%$ is the smallest tested threshold with zero false \textsc{Go} in this
+calibration, not a universal constant. Full curves are in
+Appendix~\ref{app:audit-controls}.
+
+\textbf{Does terrain heterogeneity open the frontier?}
+A natural conjecture is that mixed terrain would: if rough ground rewards
+slowing more than flat ground, a terrain-conditioned scale should beat any
+single fixed one. We test this with flat and uniformly rough ($2$--$10$\,cm)
+variants, a re-identified response model, and the scale grid extended to $0.60$
+(Appendix~\ref{app:hetero}, Table~\ref{tab:hetero}). COT falls monotonically with
+the scale on \emph{both} terrains: roughness raises the cost level but barely
+moves where its minimum lies, so no winner flips. A shared completion-time budget
+that forces choosing \emph{where} to slow down yields only $1.6\%$ of total work
+(bootstrap $95\%$ CI $[0.8, 8.4]$) at the tightest budgets, and nothing once
+slowing is allowed everywhere. The conjectured mechanism does not open the
+frontier on the roughness axis.
+
+We are careful about scope. Episode-level figures are grid-specific. Exact-replay
+Stages~2--3 cover Go2 (ten seeds) and H1 (four seeds, observation-only); H1
+collection uses stub closed-loop models only to drive episodes, not as audit
+features. Terrains we did not vary (slopes, compliance, friction) could reshape
+rather than merely shift the cost curve; richer interfaces such as gait
+parameters~\citep{margolis2022walk} are where tracking may not flatten structure.
+The claim is not that adaptivity can never help, but that its headroom is
+measurable---and on this benchmark family, recoverable allocation gain is small.
 
 \section{Limitations and Future Work}
 \label{sec:limitations}
 
 \textbf{Energy validity.}
-The large-sample benchmark optimizes and reports a dimensionless actuation-effort
-proxy, not energy. Torque-derived evaluations show lower simulated mechanical work,
-power, and COT than direct control, both for the main configuration
-(Table~\ref{tab:physical-energy}) and in the paired locked comparison on every seed
-(Table~\ref{tab:objective-audit}). What is \emph{not} demonstrated is an advantage
-over the fixed-scaling frontier: a per-robot-tuned fixed scale reaches a lower COT
-than VGCC, marginally at matched time and substantially at a large time cost
-(Figure~\ref{fig:frontier}). The consistent effect is therefore reduced power and
-running cost with a modest, adaptive work saving over the deployed policy, not a
-demonstrated advantage in mechanical energy over a tuned fixed scale. Absolute joint
-work also counts negative work without a motor-efficiency model and is not
-electrical consumption. Hardware voltage/current measurements and actuator losses
-remain necessary for a real energy claim.
+Large-sample results optimize a dimensionless actuation-effort proxy; torque
+audits support lower simulated mechanical work and COT versus direct control, but
+not versus the fixed-scaling frontier. Absolute joint work is not electrical
+energy; hardware power measurement remains necessary for a real energy claim.
 
-\textbf{Completion time.}
-Every efficiency the compensator realizes is entangled with completion time: the
-progress floor bounds the per-step slowdown, but the aggregate episode still runs
-$10$--$14\%$ longer, and the current objective penalizes time only implicitly
-through that floor. An explicit completion-time budget would make VGCC provably
-iso-time, so that any residual saving is unambiguously a gait-efficiency gain
-rather than a slowdown; folding time into the ranking itself is not the fix, as
-the objective ablation (Appendix~\ref{app:ablation}) shows it over-suppresses
-compensation. The mixed-terrain analysis of
-Section~\ref{sec:results-headroom} measures the headroom that survives a shared
-time budget at $1.6\%$ of total work (CI $[0.8, 8.4]$) on the flat--rough
-mixture, so the deployable question is not whether budgeted headroom exists but
-whether any predictor can capture the little there is, on deployments richer
-than the roughness axis.
+\textbf{Time entanglement.}
+VGCC episodes run $10$--$14\%$ longer despite the progress floor. An explicit
+completion-time budget would make residual savings unambiguously iso-time; the
+mixed-terrain shared-budget estimate is only $1.6\%$ of work with a wide CI
+$[0.8, 8.4]$.
 
-\textbf{Statistical validity.}
-Episode-level bootstrap intervals treat episodes as exchangeable even though they
-are nested within a small number of seeds. We expose seed-level paired differences
-to make this dependence visible, but the present seed counts are too small for
-precise family-level uncertainty, and overlapping success intervals do not
-demonstrate equivalence. A confirmatory study should pre-register a
-noninferiority margin for success and use a hierarchical or cluster bootstrap over
-seeds and targets, with roughly ten independent seeds per family.
+\textbf{Statistics.}
+Episode bootstrap intervals ignore nesting in seeds; overlapping success CIs are
+not equivalence tests. The Go2 adapter audit resamples ten source seeds; the H1
+confirmation uses four. Thresholds and seed counts should be pre-registered for
+confirmatory studies.
 
-\textbf{The efficiency boundary is fundamental here, not incidental.}
-The fixed-scaling and reactive-governor baselines show that the interesting
-comparison is against the speed--energy frontier, and VGCC does not dominate it. The
-oracle analysis (Section~\ref{sec:results-headroom}) makes clear this is not merely a
-modeling shortfall to be closed with a better response model: on uniform rough
-terrain the best command scale is nearly episode-independent, so even a perfect
-per-episode scale selector gains under $2\%$ over a single fixed scale. A learned
-state-conditioned gate can only beat a fixed scale where the efficiency-optimal
-command genuinely varies with state. Section~\ref{sec:results-headroom} closes
-the most natural version of that conjecture: on flat--rough mixtures, with or
-without a completion-time budget, the optimal scale barely varies and terrain
-allocation buys at most $1.6\%$. What remains open is where the structure has
-not been flattened by the tracking objective: command interfaces richer than a
-velocity scaling, such as gait parameters~\citep{margolis2022walk}; terrain axes
-that reshape rather than shift the cost curve, such as slopes or compliance; and
-hardware, where actuator losses add state dependence that simulation lacks.
-Until such structure is demonstrated, a well-tuned fixed scale remains the
-stronger baseline on cost of transport. The identification method
-(Section~\ref{sec:results-model}), by contrast, stands independently of this
-boundary.
+\textbf{Recoverability, not impossibility.}
+Local oracle headroom of $5.2\%$ (Go2) / $4.2\%$ (H1) with recovered allocation
+gains of $0.55\%$ / $0.33\%$ is evidence about the present representation and
+data, not a theorem that no learner can recover the oracle. Semi-synthetic
+controls (Figure~\ref{fig:audit-calibration}) fill decision-rule sensitivity and
+specificity, including a gain-only \textsc{Go} at $\gamma=9\%$. H1 Stages~2--3
+provide a second-robot confirmation at $\delta=1\%$ (\textsc{No-Go}). Remaining
+gaps: hardware energy, and H1 audits that include trained identified-model
+features rather than observation-only.
 
 \textbf{Scope.}
-All results are in simulation, on target reaching, with velocity-commanded
-locomotion policies across three embodiments. The framework's assumptions
-(Section~\ref{sec:setting}) characterize command-conditioned continuous control,
-not reinforcement learning in general: an unconditioned single-task policy exposes
-no interface to invert over, a task without command redundancy leaves nothing to
-save, and sparse long-horizon problems hide command consequences from any short
-response model. Within those bounds, the untested breadth is real: end-effector-commanded
-manipulation and style-commanded character control~\citep{peng2022ase} fill the
-progress/cost/viability schema of Section~\ref{sec:model} naturally and are the
-most direct test of generality. The recipe requires per-robot identification (a
-few minutes of simulation and training per robot); within the quadruped pair,
-identification is the only per-robot component, while H1 additionally adapts
-posture settings. Hardware transfer, where true energy savings matter most, is the
-natural next step, and would require handling safe excitation and model shift
-explicitly.
-
-\textbf{Model horizon and inversion.}
-The 16-step response horizon captures immediate consequences but not slow drift;
-the restore reflex compensates using measured height feedback, and a
-multiple-horizon or recurrent model could subsume it. Inversion by comparing a
-small structured candidate set is cheap and robust but coarse; gradient-based
-inversion through $f_\phi$, or a learned amortized compensator, could refine it at
-some cost to the robustness that enumeration provides against model error. Richer
-tasks (path following, disturbance recovery, velocity schedules) would exercise the
-progress constraint differently and remain untested.
+All results are simulated target reaching with velocity-commanded policies on
+three embodiments. The framework assumes a command interface with redundancy and
+fast closed-loop response. Untested: end-effector-commanded manipulation,
+style-commanded character control, hardware transfer, and richer gait interfaces
+where the tracking objective may not flatten state-dependent structure.
 
 \section{Conclusion}
 \label{sec:conclusion}
 
-We asked what can be identified about a frozen, command-conditioned locomotion
-policy from its command interface alone. Our answer is a method that identifies the
-policy--robot closed-loop command response from excitation rollouts, cheaply and
-accurately: displacement and yaw are predicted at $R^2\ge0.92$, terrain-relative
-posture at $R^2\approx0.9$, and a mechanical-cost channel at $R^2\approx0.75$--$0.8$,
-from about a minute of parallel simulation, with terrain-relative posture labels the
-one ingredient that is necessary rather than incidental. We then used this identified model as a lens on the policy in two modes. As a
-\emph{controller}, VGCC, a training-free compensator that, behind a learned
-predictive posture gate, applies a bounded correction toward the
-predicted-cheapest of a structured candidate set, robustly reduces the deployed
-policy's running cost and mechanical work below the proportional baseline across
-three embodiments, with an exact fallback and no retraining. As a \emph{measurement}, the same model turns a
-vague design question into a number: from identical initial states we bound the
-cost-of-transport frontier of command scaling with a per-episode oracle and a
-same-budget MPC, and find it narrow: a tuned fixed command scale is within $2\%$ of
-an omniscient per-episode selector, because the efficiency-optimal scale is nearly
-the same in every episode.
-
-This is the paper's central result, and it is a boundary as much as a method. It says
-that for \emph{efficiency} on rough-terrain locomotion, command-level schemes that
-rescale a frozen policy's commands are chasing a small prize: over a well-chosen
-fixed scale, the achievable episode-level gain is bounded, and neither our gate nor a
-heavier planner clears it. The value of the identification is that it makes this
-verdict cheap and predictive: a practitioner can fit the model in a minute of
-simulation and read off, before building any controller, whether the command
-interface carries enough state-dependent structure to be worth a learned one. We
-tested the most natural opening of the frontier, mixed flat and rough terrain
-under a completion-time budget, and found it closed: terrain moves the cost level
-but hardly the command that minimizes it. Where structure may still live is in
-interfaces the tracking objective does not flatten, gait parameters rather than a
-velocity scaling, on terrain that reshapes the cost curve, and on hardware with
-true energy measurement; establishing whether a learned state-conditioned gate
-can strictly dominate a fixed scale there is the experiment this study most
-directly motivates.
+Before building a learned command adapter on a frozen locomotion policy, one
+should measure whether the interface supports it. We contribute an adapter
+necessity audit that separates global operating-point gain, same-state
+counterfactual headroom, and recoverable state-allocation gain over a
+frequency-matched mixture, then returns \textsc{Go}/\textsc{No-Go}/\textsc{Abstain}
+under practical-value and violation thresholds. Closed-loop identification
+provides optional features and is accurate on average, but average accuracy does
+not imply treatment-effect ranking: on Go2, $5.2\%$ local work headroom
+yields only $0.55\%$ allocation gain; on H1, $4.2\%$ yields $0.33\%$ with a
+$\delta=1\%$ \textsc{No-Go}. That gap---not empty local
+opportunity---explains why VGCC and sampling MPC sit above a tuned fixed-scaling
+frontier. With ten Go2 seeds the real audit abstains at $\delta=1\%$;
+semi-synthetic controls (Figure~\ref{fig:audit-calibration}) show a gain-only
+\textsc{Go} at $\gamma=9\%$ and zero false \textsc{Go} at $\delta=1\%$ under
+hidden signal, while the joint rule abstains once violations become uncertain.
+Next steps: hardware energy, and H1 audits with trained identified-model features.
 
 \subsubsection*{Reproducibility}
 All experiments use public Isaac Lab environments and public pretrained RSL-RL

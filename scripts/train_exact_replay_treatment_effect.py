@@ -25,12 +25,41 @@ OUTCOME_NAMES = ("work_j", "progress_m", "min_height", "max_tilt", "max_ang_spee
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--inputs", nargs="+", required=True)
+    parser.add_argument(
+        "--feature-set",
+        choices=("observation", "observation_fphi", "observation_macro", "observation_fphi_macro"),
+        default="observation_macro",
+        help="Deployment-time representation used by the treatment-effect ensemble.",
+    )
+    parser.add_argument(
+        "--response-model",
+        default="",
+        help="Command-response ensemble used for feature sets containing fphi.",
+    )
+    parser.add_argument(
+        "--control-mode",
+        choices=("none", "observable", "hidden"),
+        default="none",
+        help="Semi-synthetic calibration: inject equal work benefits using an observable or hidden preferred scale.",
+    )
+    parser.add_argument(
+        "--control-strength",
+        type=float,
+        default=0.0,
+        help="Fractional work reduction injected into the preferred non-direct scale.",
+    )
+    parser.add_argument("--control-seed", type=int, default=20260717)
     parser.add_argument("--time-ratio", type=float, default=1.10)
     parser.add_argument("--ensemble-size", type=int, default=5)
     parser.add_argument("--hidden-dim", type=int, default=64)
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--seed", type=int, default=4050)
     parser.add_argument("--output", required=True)
+    parser.add_argument(
+        "--height-scan-slice",
+        default="48:235",
+        help="Observation slice for terrain-relative height scan (Go2 48:235, H1 69:256).",
+    )
     return parser.parse_args()
 
 
@@ -63,13 +92,83 @@ def scan_summary(scan: np.ndarray) -> np.ndarray:
     )
 
 
-def feature(sample: dict, direct: dict, scale: float) -> np.ndarray:
+def load_response_predictor(torch, path: str):
+    if not path:
+        raise ValueError("--response-model is required for feature sets containing fphi.")
+    try:
+        payload = torch.load(path, map_location="cpu", weights_only=False)
+    except TypeError:
+        payload = torch.load(path, map_location="cpu")
+    if "state_dicts" not in payload:
+        raise ValueError(f"{path} is not a command-response ensemble.")
+    models = []
+    for state_dict in payload["state_dicts"]:
+        model = torch.nn.Sequential(
+            torch.nn.Linear(payload["obs_dim"], payload["hidden_dim"]),
+            torch.nn.ReLU(),
+            torch.nn.Dropout(payload.get("dropout", 0.0)),
+            torch.nn.Linear(payload["hidden_dim"], payload["hidden_dim"]),
+            torch.nn.ReLU(),
+            torch.nn.Dropout(payload.get("dropout", 0.0)),
+            torch.nn.Linear(payload["hidden_dim"], len(payload["output_names"])),
+        )
+        model.load_state_dict(state_dict)
+        model.eval()
+        models.append(model)
+    x_mean = np.asarray(payload["x_mean"], dtype=np.float32)
+    x_std = np.asarray(payload["x_std"], dtype=np.float32)
+    y_mean = np.asarray(payload["y_mean"], dtype=np.float32)
+    y_std = np.asarray(payload["y_std"], dtype=np.float32)
+    command_slice = tuple(int(value) for value in payload["command_slice"])
+
+    def predict(observation: np.ndarray, command: np.ndarray) -> np.ndarray:
+        value = np.asarray(observation, dtype=np.float32).copy()
+        lo, hi = command_slice
+        value[lo:hi] = command[: hi - lo]
+        tensor = torch.from_numpy(((value - x_mean) / x_std)[None, :]).float()
+        with torch.inference_mode():
+            members = np.stack([model(tensor).numpy()[0] for model in models])
+        return members * y_std[None, :] + y_mean[None, :]
+
+    return predict
+
+
+def target_command(target: np.ndarray, scale: float) -> np.ndarray:
+    command = np.zeros(3, dtype=np.float32)
+    command[:2] = np.clip(target[:2], -1.0, 1.0)
+    command[2] = np.clip(
+        np.arctan2(target[1], max(float(target[0]), 1e-6)), -1.0, 1.0
+    )
+    return np.clip(command * scale, -1.0, 1.0)
+
+
+def parse_slice(raw: str) -> tuple[int, int]:
+    start_s, end_s = raw.split(":")
+    start, end = int(start_s), int(end_s)
+    if end <= start:
+        raise ValueError(f"Invalid slice '{raw}'")
+    return start, end
+
+
+def feature(
+    sample: dict,
+    direct: dict,
+    scale: float,
+    feature_set: str,
+    response_predictor=None,
+    height_scan_slice: tuple[int, int] = (48, 235),
+) -> np.ndarray:
     observation = np.asarray(sample["query_observation"], dtype=np.float32)
     target = np.asarray(sample["query_local_target"], dtype=np.float32)
+    scan_lo, scan_hi = height_scan_slice
+    if observation.shape[0] < scan_hi:
+        raise ValueError(
+            f"Observation dim {observation.shape[0]} is shorter than scan end {scan_hi}."
+        )
     state = np.concatenate(
         [
-            observation[:48],
-            scan_summary(observation[48:235]),
+            observation[:scan_lo],
+            scan_summary(observation[scan_lo:scan_hi]),
             target,
             np.asarray(
                 [np.linalg.norm(target), sample["query_start_relative_height"]],
@@ -77,23 +176,49 @@ def feature(sample: dict, direct: dict, scale: float) -> np.ndarray:
             ),
         ]
     )
-    comparison = []
-    for name in OUTCOME_NAMES:
-        candidate_values = np.asarray(sample["predicted_prefix"][name], dtype=np.float32)
-        direct_values = np.asarray(direct["predicted_prefix"][name], dtype=np.float32)
-        comparison.extend(
-            [
-                float(candidate_values.mean() - direct_values.mean()),
-                float(candidate_values.std()),
-                float(direct_values.std()),
-            ]
+    components = [state, np.asarray([scale], dtype=np.float32)]
+    if "fphi" in feature_set:
+        candidate_response = response_predictor(
+            observation, target_command(target, scale)
         )
-    return np.concatenate(
-        [state, np.asarray([scale], dtype=np.float32), np.asarray(comparison, dtype=np.float32)]
-    )
+        direct_response = response_predictor(
+            observation, target_command(target, 1.0)
+        )
+        fphi_comparison = np.stack(
+            [
+                candidate_response.mean(0) - direct_response.mean(0),
+                candidate_response.std(0),
+                direct_response.std(0),
+            ],
+            axis=1,
+        ).reshape(-1)
+        components.append(fphi_comparison.astype(np.float32))
+    if "macro" in feature_set:
+        macro_comparison = []
+        for name in OUTCOME_NAMES:
+            candidate_values = np.asarray(sample["predicted_prefix"][name], dtype=np.float32)
+            direct_values = np.asarray(direct["predicted_prefix"][name], dtype=np.float32)
+            macro_comparison.extend(
+                [
+                    float(candidate_values.mean() - direct_values.mean()),
+                    float(candidate_values.std()),
+                    float(direct_values.std()),
+                ]
+            )
+        components.append(np.asarray(macro_comparison, dtype=np.float32))
+    return np.concatenate(components)
 
 
-def load_queries(paths: list[str], time_ratio: float) -> list[dict]:
+def load_queries(
+    paths: list[str],
+    time_ratio: float,
+    feature_set: str,
+    response_predictor=None,
+    control_mode: str = "none",
+    control_strength: float = 0.0,
+    control_seed: int = 20260717,
+    height_scan_slice: tuple[int, int] = (48, 235),
+) -> list[dict]:
     queries = []
     for source_index, path_string in enumerate(paths):
         samples = json.loads(Path(path_string).read_text())["mpc_dagger_samples"]
@@ -112,6 +237,17 @@ def load_queries(paths: list[str], time_ratio: float) -> list[dict]:
                 continue
             samples_by_scale = {scale: group[scale][1] for scale in SCALES}
             outcomes = {scale: outcome(sample) for scale, sample in samples_by_scale.items()}
+            if control_mode != "none" and control_strength > 0.0:
+                if control_mode == "observable":
+                    target = np.asarray(samples_by_scale[1.00]["query_local_target"])
+                    preferred_scale = 0.90 if float(target[1]) >= 0.0 else 0.75
+                else:
+                    control_rng = np.random.default_rng(
+                        control_seed + source_index * 100_003 + group_index
+                    )
+                    preferred_scale = float(control_rng.choice(SCALES[:-1]))
+                outcomes[preferred_scale] = dict(outcomes[preferred_scale])
+                outcomes[preferred_scale]["work_j"] *= 1.0 - control_strength
             direct = outcomes[1.00]
             candidates = []
             for scale in SCALES[:-1]:
@@ -119,7 +255,14 @@ def load_queries(paths: list[str], time_ratio: float) -> list[dict]:
                 candidates.append(
                     {
                         "scale": scale,
-                        "feature": feature(samples_by_scale[scale], samples_by_scale[1.00], scale),
+                        "feature": feature(
+                            samples_by_scale[scale],
+                            samples_by_scale[1.00],
+                            scale,
+                            feature_set,
+                            response_predictor,
+                            height_scan_slice=height_scan_slice,
+                        ),
                         "work_rel": candidate["work_j"] / direct["work_j"] - 1.0,
                         "time_rel": candidate["time_s"] / direct["time_s"] - 1.0,
                         "eligible": float(
@@ -236,6 +379,7 @@ def evaluate_fold(test_queries: list[dict], output: dict, time_ratio: float) -> 
     selected_outcomes = []
     direct_outcomes = []
     oracle_correct = []
+    selected_scales = []
     activations = 0
     position = 0
     for query in test_queries:
@@ -270,6 +414,7 @@ def evaluate_fold(test_queries: list[dict], output: dict, time_ratio: float) -> 
         )
         selected_outcomes.append(selected)
         direct_outcomes.append(direct)
+        selected_scales.append(selected_scale)
         oracle_correct.append(selected_scale == oracle_scale)
 
     selected_work = float(np.mean([item["work_j"] for item in selected_outcomes]))
@@ -281,6 +426,52 @@ def evaluate_fold(test_queries: list[dict], output: dict, time_ratio: float) -> 
         )
         for selected, direct in zip(selected_outcomes, direct_outcomes)
     ]
+    choice_counts = Counter(selected_scales)
+    choice_probabilities = {
+        scale: choice_counts.get(scale, 0) / len(test_queries) for scale in SCALES
+    }
+    # A matched randomized mixture uses exactly the selector's marginal action
+    # frequencies but allocates them independently of state.  Any improvement of
+    # the learned selector over this expectation is therefore attributable to
+    # state-conditioned allocation, rather than merely slowing more often.
+    mixture_work = float(
+        sum(
+            probability
+            * np.mean([query["outcomes"][scale]["work_j"] for query in test_queries])
+            for scale, probability in choice_probabilities.items()
+        )
+    )
+    mixture_time = float(
+        sum(
+            probability
+            * np.mean([query["outcomes"][scale]["time_s"] for query in test_queries])
+            for scale, probability in choice_probabilities.items()
+        )
+    )
+    mixture_success = float(
+        sum(
+            probability
+            * np.mean([query["outcomes"][scale]["success"] for query in test_queries])
+            for scale, probability in choice_probabilities.items()
+        )
+    )
+    mixture_violation = float(
+        sum(
+            probability
+            * np.mean(
+                [
+                    not (
+                        query["outcomes"][scale]["success"]
+                        >= query["outcomes"][1.00]["success"]
+                        and query["outcomes"][scale]["time_s"]
+                        <= time_ratio * query["outcomes"][1.00]["time_s"] + 1e-9
+                    )
+                    for query in test_queries
+                ]
+            )
+            for scale, probability in choice_probabilities.items()
+        )
+    )
     return {
         "candidate_regression": {
             "work_rel_mae": float(np.mean(np.abs(work_error))),
@@ -296,6 +487,16 @@ def evaluate_fold(test_queries: list[dict], output: dict, time_ratio: float) -> 
             "mean_time_s": float(np.mean([item["time_s"] for item in selected_outcomes])),
             "success_rate": float(np.mean([item["success"] for item in selected_outcomes])),
             "constraint_violation_rate": float(np.mean(violations)),
+            "choice_counts": {f"{scale:.2f}": choice_counts.get(scale, 0) for scale in SCALES},
+        },
+        "matched_randomized_mixture": {
+            "definition": "Same marginal scale frequencies as the learned selector, allocated independently of state.",
+            "mean_work_j": mixture_work,
+            "mean_relative_work_vs_direct": float(mixture_work / direct_work - 1.0),
+            "mean_time_s": mixture_time,
+            "success_rate": mixture_success,
+            "constraint_violation_rate": mixture_violation,
+            "selector_relative_work_vs_mixture": float(selected_work / mixture_work - 1.0),
         },
     }
 
@@ -304,7 +505,21 @@ def main() -> None:
     args = parse_args()
     import torch
 
-    queries = load_queries(args.inputs, args.time_ratio)
+    response_predictor = (
+        load_response_predictor(torch, args.response_model)
+        if "fphi" in args.feature_set
+        else None
+    )
+    queries = load_queries(
+        args.inputs,
+        args.time_ratio,
+        args.feature_set,
+        response_predictor,
+        args.control_mode,
+        args.control_strength,
+        args.control_seed,
+        height_scan_slice=parse_slice(args.height_scan_slice),
+    )
     source_indices = sorted({query["source_index"] for query in queries})
     if len(source_indices) < 3:
         raise ValueError("At least three source seeds are required for this diagnostic.")
@@ -327,6 +542,13 @@ def main() -> None:
         "constraint_violation_rate",
     )
     candidate_keys = ("work_rel_mae", "work_rel_bias", "time_rel_mae", "eligibility_accuracy")
+    mixture_keys = (
+        "mean_relative_work_vs_direct",
+        "mean_time_s",
+        "success_rate",
+        "constraint_violation_rate",
+        "selector_relative_work_vs_mixture",
+    )
     payload = {
         "description": (
             "Fixed direct treatment-effect ensemble on exact-replay constant-prefix data. "
@@ -334,6 +556,22 @@ def main() -> None:
         ),
         "inputs": args.inputs,
         "time_ratio": args.time_ratio,
+        "feature_set": args.feature_set,
+        "response_model": args.response_model if "fphi" in args.feature_set else "",
+        "semi_synthetic_control": {
+            "mode": args.control_mode,
+            "strength": args.control_strength,
+            "seed": args.control_seed,
+            "definition": (
+                "Preferred scale is 0.90 for nonnegative target-y and 0.75 otherwise."
+                if args.control_mode == "observable"
+                else (
+                    "Preferred scale is deterministic-random per query and absent from features."
+                    if args.control_mode == "hidden"
+                    else "No outcome modification."
+                )
+            ),
+        },
         "architecture": {
             "ensemble_size": args.ensemble_size,
             "hidden_dim": args.hidden_dim,
@@ -354,6 +592,10 @@ def main() -> None:
         "mean_selection": {
             key: float(np.mean([fold["selection"][key] for fold in folds]))
             for key in selection_keys
+        },
+        "mean_matched_randomized_mixture": {
+            key: float(np.mean([fold["matched_randomized_mixture"][key] for fold in folds]))
+            for key in mixture_keys
         },
     }
     output = Path(args.output)

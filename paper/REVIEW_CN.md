@@ -1,8 +1,51 @@
 # 论文审查与修改记录
 
+## 结构与论述审查（顶会视角，2026-07-17；续修 2026-07-18）
+
+按 CoRL / RSS / NeurIPS robotics track 审稿标准，此前版本的核心问题不是数字错误，而是**论文身份摇摆**与**论述层级混乱**。
+
+### 拒稿级结构问题（已修）
+
+1. **三重 thesis 并存**：标题与贡献强调 adapter necessity audit，Related Work 与 Figure 1 却以 VGCC 为中心，Introduction 又先卖 identification。审稿人会问：“这是 identification 论文、控制论文，还是方法论审计论文？”→ 已统一为：**audit 是贡献主体，identification 是可选特征源，VGCC 是 case study**。
+2. **Related Work 与主贡献错位**：原稿用约两页为 VGCC 辩护（IMC / MBRL / MPC / governor / options），真正支撑 audit 的 treatment-choice / policy-value 文献被埋在末尾。→ 已压缩为四段，并把 treatment choice 提到核心位置。
+3. **实验叙事与贡献声明不一致**：原稿写 Q1=core method (identification)，Q3 才是 central question。→ 已改为 Q3 明确标为 central；Q2 降为 case-study frontier placement。
+4. **重复论述过载**：同一组数字（1.0–1.9%、5.2%、0.55%、Abstain）在 abstract / intro / results / limitations / conclusion 以近乎相同句式重复五次。→ Conclusion 与 Limitations 大幅压缩；Intro 贡献列表去重。
+5. **过度对冲导致 claim 不可读**：每段“we do not claim X; instead …”使审稿人抓不住可检验主张。→ 改为先陈述可检验主张，再一句话限定范围。
+
+### 2026-07-18 续修
+
+6. **实验小节顺序与 Q2→Q3 声明不一致**：Coverage / Ablations 原在 Adapter Necessity Audit 之后，读起来像审计完又回头卖 VGCC。→ 已重排为 Baselines → Coverage → Ablations → **Audit（高潮）**；Ablations 末增加桥接句，明确消融只解释 *how*，不证明 allocation value。
+7. **VGCC 视觉权重过高**：Algorithm 1 占正文栏。→ 已下沉至 Appendix（仍保留 `alg:vgcc` 交叉引用）；方法图移入 VGCC 小节，不再出现在 Method 开篇。
+8. **Keywords / Model 开篇仍偏 identification-controller**：→ keywords 改为 audit / counterfactual evaluation；Model 开篇改为同时服务 adapters *and* audits。
+9. **Coverage / H1 段落过长且像方法推销**：→ Coverage 改为 “before auditing recoverability, check artifact”；H1 压缩为 morphology-adapted 限定。
+
+### 语言 / 论述问题（已部分修）
+
+- 长句过多（40+ 词嵌套从句）；已缩短 Scope、VGCC eligibility、Baselines、Conclusion、H1。
+- “deliberately / exactly / rather than” 模板化对比过多；已删减。
+- Abstract 信息密度过高且中心句靠后；已改为先问 adapter 是否值得建，再给 audit 定义与诊断结果。
+- Method 开篇仍按 model→audit→VGCC 的实现顺序叙述，与“audit 优先”的贡献层级冲突；已改 framing（audit primary），实现顺序保留以便读者跟实验管线。
+
+### 仍可能被顶会抓住的内容问题（未声称已解决）
+
+- 全部仿真、无硬件功耗；proxy ≠ energy（Limitations 已诚实披露）。
+- H1 为 morphology-adapted，非 zero-shot；seed 数对 family-level 推断仍偏少。
+- Audit 在单一 domain 返回 Abstain，缺少第二 domain 的已知 recoverable-headroom 正对照。
+- 若投严格双栏 page limit，可考虑再把 Coverage 表或 hetero 地形表下沉附录。
+
+\subsection 2026-07-18 续修（画图 + 内容缺口）
+
+10. **Audit pipeline 主文图**：新增 `figures/audit_pipeline.png`（`scripts/make_audit_pipeline_figure.py`），置于 Method §audit 开篇，视觉主线改为 existence ≠ recoverability ≠ allocation。
+11. **校准图填补决策规则正/负对照缺口**：新增 `figures/audit_calibration.png`。纠正旧文“γ=5% gain channel clears δ”的不严谨表述：mean 过 δ 在 5%，**gain-only GO（$L_H>\delta$）在 9%**；joint rule 全程 Abstain。Hidden 映射在 δ=1% 零 false GO。诚实声明：这是决策规则的 known-signal domain，**不是**第二机器人 domain。
+12. **第二 embodiment 缺口的部分填补**：Stage 1 明确标为 Go2+H1 双 embodiment screen；Stages 2–3 exact-replay 仍仅 Go2，Limitations 写明确认路径。
+13. **Hetero 表下沉附录**（`app:hetero`），为主文腾出校准图空间。
+14. **仍未填**：硬件功耗；H1/ANYmal exact-replay Stages 2–3（需新仿真采集）。
+
+15. **H1 Stages 2–3 exact-replay（最大缺口）**：完成管线移植（stub macro/TV 仅驱动 episode；observation-only 审计；`--height-scan-slice 69:256`）。4 seeds（870–873，192 queries，replay L2=0）：oracle −4.18%，selector vs mixture −0.33%（CI [0.04,0.66]），δ=1% → **No-Go**。已写入主文；875+ 继续采集中。诚实披露：stub 不参与决策特征。
+
 ## 总体判断
 
-当前工作具备一个可辨识的方法主线：对冻结策略的“策略—机器人闭环”建立命令响应模型，再以进度约束、姿态门控和有界修正进行在线搜索。这个组合有一定科研价值，也比单纯经验库检索更完整。但按机器人学习主会/主刊标准，现有证据仍不足以支撑“真实节能”“安全”“统计等效”或“广泛通用”的强结论。更合理的定位是有潜力的 simulation study / workshop 或预印本；若要冲击较强 venue，需要补真实能耗指标、强基线、按 seed 聚类的统计推断和硬件或更广任务验证。
+当前工作具备一个可辨识的方法主线：对冻结策略的“策略—机器人闭环”建立命令响应模型，再以进度约束、姿态门控和有界修正进行在线搜索。这个组合有一定科研价值，也比单纯经验库检索更完整。但按机器人学习主会/主刊标准，现有证据仍不足以支撑“真实节能”“安全”“统计等效”或“广泛通用”的强结论。更合理的定位是有潜力的 simulation study / workshop 或预印本；若要冲击较强 venue，需要补真实能耗指标、强基线、按 seed 聚类的统计推断和硬件或更广任务验证。结构修订后，论文至少具备清晰、可辩护的主 claim：**existence ≠ recoverability ≠ allocation**。
 
 ## 1. Figure 审查
 

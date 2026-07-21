@@ -49,14 +49,71 @@ height-decline tolerance $\delta$: $(0.85, 0.80, 0.90)$ with $\delta=2$\,cm for
 both quadrupeds, $(0.93, 0.90, 0.96)$ with $\delta=0.8$\,cm for H1
 (Section~\ref{sec:setup}).
 
+\textbf{VGCC pseudocode.}
+Algorithm~\ref{alg:vgcc} states one high-level decision. If no candidate is eligible, or the cost margin fails, the controller executes $c_{\text{goal}}$ exactly.
+
+\begin{algorithm}[t]
+\caption{Viability-Gated Command Compensation (one high-level step)}
+\label{alg:vgcc}
+\begin{algorithmic}[1]
+\Require frozen policy $\pi_\theta$, response model $f_\phi$, target $g$, correction gain $\alpha$, anneal distance $d_{\text{anneal}}$, and fixed scalars $(\beta,h_{\rm floor},h_{\rm resc},\delta,\epsilon)$
+\State Compute body-frame target $g$, direct command $c_{\text{goal}}$ (Eq.~\ref{eq:cgoal}), and the candidate set $\mathcal{C}$ around $c_{\text{goal}}$
+\State Batch-predict $f_\phi(o,c)$ for all $c\in\mathcal{C}$; set $\alpha_t=\alpha\operatorname{clip}(d/d_{\text{anneal}},0,1)$
+\If{measured posture is below the operating band}
+  \State $c\gets c_{\text{goal}}$ \Comment{restore}
+\ElsIf{direct control is predicted to breach the posture floor $h_{\rm resc}$}
+  \State $c^\ast\gets\arg\max_{\mathcal{C}:\,\hat G\ge 0}\hat h_{\min}$;\quad $c\gets c_{\text{goal}}+\alpha_t(c^\ast-c_{\text{goal}})$ \Comment{rescue}
+\Else
+  \State $c^\ast\gets\arg\min_{\mathcal{C}\,\text{eligible (Eq.~\ref{eq:vgc-eligible})}}\hat C$
+  \If{$\hat C(c^\ast)<(1-\epsilon)\,\hat C(c_{\text{goal}})$ (Eq.~\ref{eq:vgc-cost})}
+    \State $c\gets c_{\text{goal}}+\alpha_t(c^\ast-c_{\text{goal}})$ \Comment{compensate}
+  \Else
+    \State $c\gets c_{\text{goal}}$ \Comment{exact direct fallback}
+  \EndIf
+\EndIf
+\State Execute $\pi_\theta$ with $c$ for $E$ low-level steps
+\end{algorithmic}
+\end{algorithm}
+
 \textbf{Sampling MPC baseline.}
-The same-budget MPC of Section~\ref{sec:results-baselines} plans over per-step
-scale sequences drawn from $\{0.75, 0.90, 1.00\}$ with planning depth 4
-high-level steps, rolling the identified models forward, and executes the first
-command of the best sequence; it shares the response model, decision rate, and
-command bounds with VGCC.
+The MPC of Section~\ref{sec:results-baselines} does \emph{not} recursively use
+the six-output response model $f_\phi$: that model has no next-observation
+output and cannot be rolled forward. Instead, MPC uses a separately trained
+five-member macro-transition ensemble
+\[
+F_\eta(o_t,c_t)\mapsto
+(\widehat{o_{t+4}-o_t},\widehat{\Delta x},\widehat{\Delta y},
+\widehat{\Delta\psi},\widehat P,\widehat h_{\min},
+\widehat{\theta}_{\max},\widehat{\omega}_{\max}),
+\]
+where one macro step is four low-level steps ($0.08$\,s). The model has two
+hidden layers of width 512 and is trained on 42{,}054 windows from 207 episode
+groups with disjoint train/validation/test groups. Each ensemble member
+recursively advances its own predicted full observation residual; the command
+slice is overwritten by the next planned command before the following query.
+At four macro steps ($0.32$\,s), held-out open-loop errors are $3.3$\,cm
+displacement MAE, $5.17$\,J cumulative-work MAE, $8.8$\,mm minimum-height MAE,
+and $0.756$ normalized full-state RMSE.
+
+MPC enumerates all $3^4=81$ scale sequences from
+$\{0.75,0.90,1.00\}$ and executes the first command of the selected sequence.
+After the four-step rollout, a second, separately trained task-value network
+predicts remaining work, remaining time, and success under direct-control
+continuation from the predicted terminal observation and local target. It is
+trained on 4{,}298 samples from 144 mixed-controller episodes; held-out metrics
+are work MAE $15.7$\,J ($R^2=0.846$), time MAE $0.362$\,s
+($R^2=0.654$), and success AUC $0.819$. MPC minimizes ensemble-upper-bound total
+work subject to predicted success, time, posture, and optional stability
+constraints, with exact direct-sequence fallback.
+
+Thus MPC shares the decision rate and command bounds with VGCC but not its model
+or data budget. Its 81 sequence evaluations are numerically close to VGCC's
+approximately 70 one-step candidates, but each sequence uses four recursive
+ensemble transitions plus a terminal-value query. We describe it as a heavier
+model-based baseline, not a same-model or equal-compute comparison.
 
 \textbf{Mixed-terrain evaluation (Section~\ref{sec:results-headroom}).}
+\label{app:hetero}
 The flat and rough single-type tasks replace the terrain generator of the
 otherwise unchanged rough environment with a single sub-terrain each: a plane,
 and uniform height noise of $2$--$10$\,cm; every scene, observation, command,
@@ -64,12 +121,186 @@ and event setting is identical, and the same pretrained checkpoint is used.
 The response model for these deployments is identified once on pooled excitation
 from both terrains with the unchanged recipe ($\approx$25k windows; displacement
 $R^2=0.92$, cost $0.73$). Fixed scales $\{0.60, 0.75, 0.90, 1.00\}$ and VGCC run
-from identical initial states on three seeds disjoint from all tuning. The
-budget analysis pairs one flat with one rough leg, sweeps a shared
-completion-time budget over the feasible range, and compares the best
-budget-feasible uniform scale against the best per-terrain scale allocation on
-the convex hulls of the per-terrain (work, time) means; the reported interval is
-an episode bootstrap over both legs.
+from identical initial states on three seeds disjoint from all tuning. Because
+the world-frame final-height criterion is dominated by stop-point ground elevation
+on $\pm10$\,cm noise, completion means reaching the target without early
+termination. Table~\ref{tab:hetero} reports the paired frontier: COT falls
+monotonically on both terrains. The budget analysis pairs one flat with one rough
+leg, sweeps a shared completion-time budget over the feasible range, and compares
+the best budget-feasible uniform scale against the best per-terrain scale
+allocation on the convex hulls of the per-terrain (work, time) means; the
+reported interval is an episode bootstrap over both legs.
+
+\begin{table}[h]
+\centering
+\caption{Single-terrain-type paired evaluation (Go2, three seeds, eight targets $\times$ two trials; completion = target reached without early termination; flat $n=48$, rough $n=36$ jointly completed episodes per scale, of 48 evaluated). COT falls monotonically with the scale on both terrains.}
+\label{tab:hetero}
+\begin{tabular}{lcccccc}
+\toprule
+& \multicolumn{3}{c}{Flat} & \multicolumn{3}{c}{Rough ($2$--$10$\,cm)} \\
+\cmidrule(lr){2-4}\cmidrule(lr){5-7}
+Scale & COT & Work (J) & Time (s) & COT & Work (J) & Time (s) \\
+\midrule
+1.00 & 1.027 & 179.6 & 1.80 & 1.670 & 290.5 & 2.16 \\
+0.90 & 0.964 & 166.7 & 1.99 & 1.598 & 278.5 & 2.30 \\
+0.75 & 0.897 & 152.6 & 2.36 & 1.513 & 265.2 & 2.76 \\
+0.60 & 0.882 & 148.8 & 2.90 & 1.447 & 247.8 & 3.31 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Exact-replay adapter necessity audit.}
+The Go2 audit of Section~\ref{sec:results-headroom} uses ten source seeds, 48 query
+states per seed (480 total), and constant four-macro-step prefixes from
+$\{0.75,0.90,1.00\}$. For each query and scale, the simulator is reset to the
+episode start, the recorded direct-control prefix is replayed to the query, the
+candidate prefix is executed, and direct control completes the episode. The
+terrain curriculum is frozen; all query observations reconstruct exactly
+(maximum observation error zero). This start-state replay is necessary because
+Isaac Lab's scene-state reset does not restore policy observation and action
+history. Seeds 854, 855, 856, 858, and 859 are the original collection; seeds
+860, 862, 863, 864, and 865 were added with the same protocol
+(\texttt{run\_exact\_replay\_prefix\_seeds.sh}). The exploratory four-way feature
+ablation table below remains on the original five-seed subset; the main text
+reports the ten-seed observation-only versus observation+$F_\eta$ comparison.
+
+\textbf{H1 second-embodiment exact replay.}
+The H1 confirmation uses the same constant-scale prefix protocol
+(\texttt{run\_exact\_replay\_prefix\_seeds\_h1.sh}) with
+\texttt{--ff\_height\_scan\_slice 69:256}. Because trained H1 macro-transition and
+task-value models were not available, collection drives episodes with
+dimension-matched untrained stubs
+(\texttt{h1\_macro\_transition\_h4\_stub5.pt}, \texttt{h1\_task\_value\_stub.pt}).
+These stubs affect only which query states are visited; every reported
+counterfactual outcome is an exact same-state replay with observation
+reconstruction error zero. The H1 treatment-effect audit uses the observation-only
+feature set with \texttt{--height-scan-slice 69:256} and does not consume stub
+prefix predictions. Four completed source seeds (870--873; 192 queries) are
+reported in the main text; additional seeds continue under the same recipe.
+
+The same-state oracle requires candidate success no worse than the direct branch
+and total remaining time no greater than $1.10$ times direct, then minimizes
+total mechanical work. The treatment-effect model is a five-member, two-layer
+MLP ensemble (hidden width 64) trained for 200 epochs. Inputs contain the
+deployment observation, local target, candidate scale, and differences between
+candidate and direct macro-response ensemble predictions (work, progress,
+minimum height, maximum tilt, and maximum angular speed; means and
+uncertainties). Targets are candidate work and time relative to the direct
+branch and realized eligibility. Evaluation leaves one entire source seed out.
+The selector accepts a candidate only when its work upper confidence estimate is
+negative, its time upper estimate meets the budget, and its eligibility
+probability lower estimate is at least $0.5$.
+
+For each held-out fold, the matched randomized mixture uses the selector's exact
+marginal frequencies of scales $0.75$, $0.90$, and $1.00$, but assigns them
+independently of query state. Its reported metrics are the exact expectation over
+the replayed potential outcomes, so no Monte Carlo sampling noise is introduced.
+The selector--mixture difference isolates state-dependent allocation from the
+gain due merely to issuing slower commands more often. Scripts and aggregate
+artifacts are
+\texttt{analyze\_exact\_replay\_oracle.py},
+\texttt{train\_exact\_replay\_treatment\_effect.py},
+\texttt{exact\_replay\_prefix\_oracle\_5seed.json}, and
+\texttt{exact\_replay\_adapter\_necessity\_audit\_5seed.json}.
+
+\subsection{Treatment-Effect Feature Ablation}
+\label{app:feature-ablation}
+
+We isolate which deployment-time representation contributes to the final
+decision while holding the treatment-effect ensemble, five leave-one-source-seed-out
+folds, confidence rule, and matched-mixture evaluation fixed. All variants
+receive the current observation summary, local target, and candidate scale.
+The $f_\phi$ variant adds candidate-versus-direct means and ensemble
+uncertainties from the six-output one-window response model. The $F_\eta$
+variant adds the corresponding four-step macro-prefix predictions used by MPC.
+
+\begin{table}[h]
+\centering
+\caption{Exploratory feature ablation for the exact-replay treatment-effect selector (240 queries). ``Allocation gain'' is selector work relative to its own frequency-matched randomized mixture; negative is better. The pre-existing main result is observation+$F_\eta$.}
+\label{tab:feature-ablation}
+\begin{tabular}{lccccc}
+\toprule
+Features & Work MAE & Active & Work vs.\ direct & Allocation gain & Violations \\
+\midrule
+observation only & $12.60\%$ & $8.8\%$ & $-0.43\%$ & $-0.38\%$ & $0.42\%$ \\
+observation + $f_\phi$ & $12.93\%$ & $13.8\%$ & $-0.37\%$ & $-0.35\%$ & $4.17\%$ \\
+observation + $F_\eta$ & $\mathbf{12.22\%}$ & $12.9\%$ & $-0.54\%$ & $-0.42\%$ & $1.67\%$ \\
+observation + $f_\phi+F_\eta$ & $12.33\%$ & $12.1\%$ & $\mathbf{-0.76\%}$ & $\mathbf{-0.76\%}$ & $2.92\%$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Observation-only features recover nearly the same allocation gain as the
+prespecified observation+$F_\eta$ representation ($0.38\%$ versus $0.42\%$).
+Adding $f_\phi$ alone does not improve work error or allocation and increases
+realized constraint violations. Combining both identified models gives the
+largest point estimate, $0.76\%$, but this interaction was discovered on the
+same five folds, is below one percent, and incurs more violations; it is not a
+nested or independently confirmed model-selection result. We therefore retain
+observation+$F_\eta$ as the main prespecified audit and report the combined row
+only as a hypothesis for future confirmation. The robust conclusion is that
+the treatment-effect ensemble extracts most of its limited signal from the
+observation itself; neither identified model provides a decisive incremental
+contribution on this dataset.
+
+\subsection{Audit Calibration Controls}
+\label{app:audit-controls}
+
+The semi-synthetic calibration changes only candidate mechanical-work outcomes;
+observations, targets, success, time, posture, source-seed splits, and the
+treatment-effect learner remain unchanged. For observable controls, the
+preferred scale is $0.90$ when the pre-intervention local target has
+$y\ge0$ and $0.75$ otherwise, and its realized work is multiplied by
+$1-\gamma$. Hidden controls draw the preferred scale independently for each
+query using a deterministic seed and do not expose that draw in any feature.
+The matched-mixture calculation is repeated after each modification.
+
+Confidence intervals resample the ten source-seed folds as clusters with
+100{,}000 bootstrap replicates (seed 20260717). Table~\ref{tab:control-curve}
+reports the ten-seed observable-signal sweep used in the main text. Decisions
+use $\kappa=5\%$; G, N, and A denote \textsc{Go}, \textsc{No-Go}, and
+\textsc{Abstain}.
+
+\begin{table}[h]
+\centering
+\caption{Observable-signal calibration on ten source seeds. Decision columns correspond to practical allocation-value thresholds $\delta$.}
+\label{tab:control-curve}
+\begin{tabular}{lccccc}
+\toprule
+$\gamma$ & $H_{\rm alloc}$, 95\% CI & Mean $q$ & $\delta=.25\%$ & $.50\%$ & $1.00\%$ \\
+\midrule
+$2\%$  & $0.53\ [0.17,0.87]\%$ & $3.12\%$ & A & A & N \\
+$5\%$  & $1.26\ [0.75,1.78]\%$ & $4.58\%$ & A & A & A \\
+$9\%$  & $2.32\ [1.67,2.98]\%$ & $5.42\%$ & A & A & A \\
+$10\%$ & $2.61\ [1.85,3.30]\%$ & $5.42\%$ & A & A & A \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Relative to the earlier five-seed curve, the work intervals move as expected
+once $\gamma\ge5\%$, but the violation intervals are wider and cross
+$\kappa=5\%$, so the joint rule abstains throughout this sweep. A five-seed
+\textsc{Go} at $\gamma=9\%$ therefore does not survive the larger cluster
+sample: underpowered audits can manufacture apparent detection.
+
+To estimate specificity, we repeat the $5\%$ hidden-signal control with ten
+independent mappings (control seeds 20260720--20260729) on the same ten source
+seeds. The false-\textsc{Go} counts are $3/10$, $2/10$, and $0/10$ at
+$\delta=0.25\%,0.50\%,1.00\%$, respectively. At $\delta=1\%$, four mappings
+return \textsc{No-Go} and six \textsc{Abstain}. This stress test motivates
+reporting the entire decision curve and keeping $\delta$ no smaller than the
+threshold with zero false \textsc{Go} outcomes in calibration. It does not
+establish a universal $1\%$ threshold: another domain requires its own
+deployment value and control-based calibration.
+
+The control experiments are generated by
+\texttt{train\_exact\_replay\_treatment\_effect.py}; source-seed intervals and
+decisions are produced by
+\texttt{summarize\_adapter\_value\_audit.py}. Aggregate artifacts are
+\texttt{adapter\_value\_audit\_observable\_curve\_10seed\_summary.json} and
+\texttt{adapter\_value\_audit\_hidden\_05pct\_repeats\_10seed\_summary.json}.
+The prefix collection recipe is
+\texttt{run\_exact\_replay\_prefix\_seeds.sh}.
 
 \section{Secondary Experiments and Diagnostics}
 \label{app:secondary}

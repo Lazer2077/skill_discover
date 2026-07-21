@@ -1,16 +1,22 @@
 # VGCC Paper
 
-arXiv-style preprint: **Closed-Loop Command-Response Identification of Frozen Locomotion Policies**.
+arXiv-style preprint: **When Is a Learned Command Adapter Worth It? Closed-Loop Identification and Counterfactual Auditing of Frozen Locomotion Policies**.
 
 The paper identifies the closed-loop command response of a frozen,
-command-conditioned locomotion policy from excitation rollouts, and uses the
-identified model in two modes: as a *controller* (VGCC, a training-free
-viability-gated compensator) and as a *measurement* (bounding the efficiency
-available at the command interface). Central finding: the command-level efficiency
-frontier is narrow (a tuned fixed scale is within 2% of an omniscient per-state
-oracle). In the code, the unified controller is `viability_gated_scaling_command`;
-the large-sample benchmark uses the bounded-correction proxy config
-(`model_feedforward_command`).
+command-conditioned locomotion policy, then audits whether that representation
+contains enough counterfactual ranking signal to justify a learned adapter.
+The audit separates global operating-point gain, same-state oracle headroom, and
+recoverable state-allocation gain over a frequency-matched randomized mixture.
+Central finding: local intervention headroom exists (5.21% on ten seeds), but a
+cross-seed treatment-effect selector recovers only 0.55% beyond its matched
+mixture. A source-seed cluster bootstrap plus user-specified practical-value and
+violation thresholds returns GO / NO-GO / ABSTAIN rather than an unconditional
+binary claim. At a 1% value threshold and 5% violation tolerance, the ten-seed
+audit is ABSTAIN (revising a five-seed NO-GO). Semi-synthetic observable/hidden
+controls calibrate detection and false-GO behavior; they are not presented as
+additional robot domains. In the code, the unified controller is
+`viability_gated_scaling_command`; the large-sample benchmark uses
+`model_feedforward_command`.
 
 ## Abstract — version history
 
@@ -53,7 +59,12 @@ Every number retained in the paper was verified against raw result files (paths 
 | §4.3 running-cost aggregate + Fig. 1 (paired differences) | `outputs/isaac_go2_rough_rsl_rl_skills_long/ff_v4_harder8_summary.json` (inputs: `ff_v4_harder8_10trials_seed70{1..5}_positions.json`); paired figure via session script `make_paired_figure.py` |
 | §4.3 Table 2 (torque-derived mechanical work) | `a_mechanical_energy_2trials_seed78{1,2,3}.json` (3 seeds, 48 episodes/method; applied torque, mechanical work, power, J/m, COT) |
 | §4.4 Table 3 + Fig. 2 (paired iso-time frontier: direct, fixed 0.75/0.90, governor, VGCC proxy/power) | `outputs/e1_isotime/frontier_seed79{4,5,6,7,8,9}.json` (6 locked seeds, 8 harder targets × 2 trials = 96 eps/method, `--paired_method_resets`); seeds 797-799 via `scripts/run_e1_frontier.sh`, 794-796 via `scripts/run_e6e4_now.sh` (both write to `~/storage/skill_discover/outputs/`, symlinked into `outputs/`). Aggregate `scripts/aggregate_e1_frontier.py`, figure `scripts/make_frontier_figure.py`, adaptivity-headroom probe (§4.6) `scripts/probe_adaptivity_headroom.py`. VGCC beats direct on work/power/COT 6/6 seeds but sits just above the fixed-scaling frontier. Power model `go2_command_response_power_ensemble5.pt` |
-| §4.4 sampling-MPC baseline (completion\_mpc\_command, dominated) | `outputs/e6_mpc/e6_seed79{7,8,9}.json` (n=48, paired); run `scripts/run_e6_mpc.sh`; needs `go2_macro_transition_h4_ensemble5.pt` + `go2_task_value_model.pt` |
+| §4.4 sampling-MPC baseline (completion\_mpc\_command, dominated) | `outputs/e6_mpc/e6_seed79{7,8,9}.json` (n=48, paired); run `scripts/run_e6_mpc.sh`. MPC does **not** recursively roll the six-output VGCC response model: it uses the separate full-observation-residual ensemble `go2_macro_transition_h4_ensemble5.pt` plus terminal continuation model `go2_task_value_model.pt`; training summaries are the corresponding `*_summary.json` files. |
+| §4.5 adapter necessity audit | Ten exact-replay sources `completion_mpc_prefix_{train,validation}_seed{854,855,856,858,859,860,862,863,864,865}.json` (new seeds stored under `~/storage/...` and symlinked); finite-grid same-state oracle `exact_replay_prefix_oracle_10seed.json`; leave-one-source-seed-out treatment-effect selector and matched randomized mixture `outputs/response_model/exact_replay_adapter_audit_observation_macro_10seed.json`; scripts `analyze_exact_replay_oracle.py`, `train_exact_replay_treatment_effect.py`, `run_exact_replay_prefix_seeds.sh`, `rebuild_adapter_audit_10seed.sh` |
+| Appendix feature ablation | Five-seed exploratory table: `outputs/response_model/exact_replay_adapter_audit_{observation,observation_fphi,observation_macro,observation_fphi_macro}_5seed.json`; ten-seed observation vs macro comparison in the main text uses the corresponding `*_10seed.json` files |
+| H1 Stages 2–3 exact-replay audit | Prefix seeds `outputs/isaac_h1_rough_exact_replay/completion_mpc_prefix_train_seed870..873.json` (storage-backed); oracle `exact_replay_prefix_oracle_4seed.json`; observation-only LOSO `outputs/response_model/exact_replay_adapter_audit_h1_observation_4seed.json`; bootstrap `adapter_value_audit_h1_4seed_summary.json`; scripts `run_exact_replay_prefix_seeds_h1.sh`, `rebuild_adapter_audit_h1.sh`, `make_h1_exact_replay_stubs.py` |
+| Audit pipeline / calibration figures | `scripts/make_audit_pipeline_figure.py`, `scripts/make_audit_calibration_figure.py`; data from `adapter_value_audit_{10seed,observable_curve_10seed,hidden_05pct_repeats_10seed}_summary.json` |
+| §4.5 / Appendix audit calibration | Ten-seed observable curve `outputs/response_model/adapter_value_audit_observable_curve_10seed_summary.json`; ten repeated hidden-signal mappings `adapter_value_audit_hidden_05pct_repeats_10seed_summary.json`; generated by `train_exact_replay_treatment_effect.py --control-mode ...` and clustered/decided by `summarize_adapter_value_audit.py` (100,000 source-seed bootstrap replicates) |
 | §4.5 Coverage: Go2 moderate/holdout | `ff_v4_moderate_summary.json`, `ff_v4_holdout_summary.json` (Go2 dir) |
 | §4.5 Coverage: ANYmal-D (8 targets) | `outputs/isaac_anymal_rough_ff/ff_v4_anymal_summary.json`; response model `outputs/response_model/anymal_command_response_model_summary.json` |
 | §4.5 Coverage: H1 (8 targets, −4.7%) | `outputs/isaac_h1_rough_rsl_rl_skills/ff_v7_h1solved_summary.json` (inputs: `ff_v7_h1solved_5trials_seed90{1..3}_positions.json`; posture floors tightened for humanoid: `--ff_min_height_fraction 0.93 --ff_rescue_height_fraction 0.90 --ff_current_height_fraction 0.96 --ff_max_height_drop 0.008`); response model `outputs/response_model/h1_command_response_model_v2_summary.json` |
@@ -69,15 +80,12 @@ Every number retained in the paper was verified against raw result files (paths 
 Pipelines:
 - Response dataset: `scripts/collect_response_dataset.py` (uniform command excitation, terrain-relative height + torque-derived power labels)
 - Model training: `scripts/train_command_response_model.py`; power ensemble: `scripts/train_command_response_ensemble.py`
+- Adapter audit: `scripts/train_exact_replay_treatment_effect.py`; source-seed uncertainty and decisions: `scripts/summarize_adapter_value_audit.py`
 - Evaluation: `scripts/evaluate_rsl_skill_command_control.py` (`viability_gated_scaling_command` = unified VGCC, `model_feedforward_command` = bounded-correction proxy VGCC used for the large benchmark, `guarded_skill_command` = VGSR retrieval variant)
 - Systematic chain: `scripts/run_ff_systematic_experiments.sh`; aggregation: `scripts/aggregate_ff_results.py`
 - VGCC tuned only on seed 301 (harder set); all reported results use disjoint seeds (201–205, 701–705, 231–233, 601–603, 901–903).
 
-> The exact-replay / completion-MPC / task-value / treatment-effect controllers and
-> the uncertainty and multi-signal safety filters were development-time audits used
-> to stress-test and shape the final algorithm. They are no longer presented in the
-> paper; their scripts (`train_task_value_model.py`, `train_macro_transition_ensemble.py`,
-> `train_exact_replay_treatment_effect.py`, `train_mpc_prefix_calibrator.py`,
-> `train_policy_value_model.py`, `train_paired_scale_selector.py`,
-> `analyze_exact_replay_oracle.py`, `analyze_oracle_separability.py`) and result
-> files remain in the repository for reference.
+> Exact replay, treatment-effect selection, the matched randomized mixture, and
+> the macro-transition/task-value MPC are now explicit audit components. Other
+> development-only controllers remain repository diagnostics and are not claimed
+> as paper methods.
